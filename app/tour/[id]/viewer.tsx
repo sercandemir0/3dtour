@@ -13,13 +13,21 @@ import { PanoramaViewer } from '@/src/components/TourViewer/PanoramaViewer';
 import type { Scene } from '@/src/types/tour';
 
 export default function ViewerScreen() {
-  const { id } = useLocalSearchParams<{ id: string }>();
+  const { id, startScene } = useLocalSearchParams<{ id: string; startScene?: string }>();
   const { currentTour, loading, fetchTour } = useTourStore();
   const [activeSceneIndex, setActiveSceneIndex] = useState(0);
+  const scenes = (currentTour?.scenes ?? []).filter((s) => s.panorama_url);
 
   useEffect(() => {
     if (id) fetchTour(id);
   }, [id]);
+
+  useEffect(() => {
+    if (!scenes.length || startScene == null) return;
+    const parsed = Number(startScene);
+    if (!Number.isFinite(parsed)) return;
+    setActiveSceneIndex(Math.max(0, Math.min(scenes.length - 1, parsed)));
+  }, [startScene, scenes.length]);
 
   if (loading || !currentTour) {
     return (
@@ -29,8 +37,6 @@ export default function ViewerScreen() {
       </View>
     );
   }
-
-  const scenes = (currentTour.scenes ?? []).filter((s) => s.panorama_url);
 
   if (scenes.length === 0) {
     return (

@@ -42,6 +42,13 @@ type Phase = 'level' | 'chooseMode' | 'sweep_photo' | 'sweep_video' | 'review';
 interface Props {
   sceneName: string;
   nextSceneName?: string;
+  roomProgressLabel?: string;
+  existingCapture?: {
+    primaryUri?: string | null;
+    sources?: SceneCaptureSource[];
+    sectorMask?: boolean[];
+    mediaType?: SceneMediaType;
+  } | null;
   onComplete: (payload: GuidedCapturePayload) => void;
   onClose: () => void;
 }
@@ -54,21 +61,71 @@ function relativeYawDeg(alphaRad: number, refRad: number): number {
   return normalizeYawDeg(radToDeg(alphaRad - refRad));
 }
 
-export function GuidedCamera({ sceneName, nextSceneName, onComplete, onClose }: Props) {
+function normalizeSectorMask(mask?: boolean[]): boolean[] {
+  return Array.from({ length: SECTOR_COUNT }, (_, i) => !!mask?.[i]);
+}
+
+function mergeCaptureSources(
+  current: SceneCaptureSource[],
+  incoming: SceneCaptureSource[],
+): SceneCaptureSource[] {
+  const bySector = new Map<number, SceneCaptureSource>();
+  const withoutSector: SceneCaptureSource[] = [];
+
+  const pushSource = (source: SceneCaptureSource) => {
+    if (source.sectorIndex != null) {
+      bySector.set(source.sectorIndex, source);
+      return;
+    }
+
+    if (!withoutSector.some((item) => item.uri === source.uri)) {
+      withoutSector.push(source);
+    }
+  };
+
+  current.forEach(pushSource);
+  incoming.forEach(pushSource);
+
+  return [
+    ...Array.from(bySector.entries())
+      .sort((a, b) => a[0] - b[0])
+      .map(([, source]) => source),
+    ...withoutSector,
+  ];
+}
+
+export function GuidedCamera({
+  sceneName,
+  nextSceneName,
+  roomProgressLabel,
+  existingCapture,
+  onComplete,
+  onClose,
+}: Props) {
   const cameraRef = useRef<CameraView>(null);
   const [permission, requestPermission] = useCameraPermissions();
-  const [phase, setPhase] = useState<Phase>('level');
   const [cameraReady, setCameraReady] = useState(false);
+
+  const resumeMask = normalizeSectorMask(existingCapture?.sectorMask);
+  const shouldResumeCapture = resumeMask.some(Boolean) && !isFullCoverage(resumeMask);
+  const resumedSources = shouldResumeCapture ? existingCapture?.sources ?? [] : [];
+  const resumedPrimaryUri = shouldResumeCapture
+    ? existingCapture?.primaryUri ?? resumedSources[0]?.uri ?? null
+    : null;
+
+  const [phase, setPhase] = useState<Phase>('level');
 
   const [orientation, setOrientation] = useState({ beta: 0, gamma: 0, alpha: 0 });
   const [isLevel, setIsLevel] = useState(false);
   const refAlphaRad = useRef<number | null>(null);
   const alphaLiveRef = useRef(0);
 
-  const [sweepMode, setSweepMode] = useState<'photo' | 'video' | null>(null);
-  const [sectorMask, setSectorMask] = useState<boolean[]>(() => emptySectorMask());
-  const [sources, setSources] = useState<SceneCaptureSource[]>([]);
-  const [primaryUri, setPrimaryUri] = useState<string | null>(null);
+  const [sweepMode, setSweepMode] = useState<'photo' | 'video' | null>(
+    shouldResumeCapture ? 'photo' : null,
+  );
+  const [sectorMask, setSectorMask] = useState<boolean[]>(shouldResumeCapture ? resumeMask : emptySectorMask());
+  const [sources, setSources] = useState<SceneCaptureSource[]>(resumedSources);
+  const [primaryUri, setPrimaryUri] = useState<string | null>(resumedPrimaryUri);
 
   const [capturing, setCapturing] = useState(false);
   /** When false, aligned hold triggers automatic capture (native photo sweep only). */
@@ -121,6 +178,7 @@ export function GuidedCamera({ sceneName, nextSceneName, onComplete, onClose }: 
     return () => {
       sub?.remove();
       if (yawPollRef.current) clearInterval(yawPollRef.current);
+      if (autoShutterTimerRef.current) clearTimeout(autoShutterTimerRef.current);
     };
   }, []);
 
@@ -151,6 +209,12 @@ export function GuidedCamera({ sceneName, nextSceneName, onComplete, onClose }: 
       refAlphaRad.current = 0;
       return;
     }
+    if (shouldResumeCapture) {
+      setSweepMode('photo');
+      beginSweepReference();
+      setPhase('sweep_photo');
+      return;
+    }
     setPhase('chooseMode');
   };
 
@@ -163,6 +227,22 @@ export function GuidedCamera({ sceneName, nextSceneName, onComplete, onClose }: 
   const pickVideoSweep = () => {
     setSweepMode('video');
     setPhase('sweep_video');
+  };
+
+  const restartVideoSweep = () => {
+    yawSamplesRef.current = [];
+    recordingPromiseRef.current = null;
+    setSweepMode('video');
+    setSources([]);
+    setSectorMask(emptySectorMask());
+    setPrimaryUri(null);
+    setPhase('sweep_video');
+  };
+
+  const continueWithPhotoSweep = () => {
+    setSweepMode('photo');
+    beginSweepReference();
+    setPhase('sweep_photo');
   };
 
   const startVideoRecording = async () => {
@@ -224,13 +304,23 @@ export function GuidedCamera({ sceneName, nextSceneName, onComplete, onClose }: 
         .sort()
         .map((k) => bySector[Number(k)]);
 
+      if (newSources.length === 0) {
+        Alert.alert(
+          'Tarama tamamlanamadı',
+          'Video yön bilgisi çıkarılamadı. Aynı oda için fotoğraf rehberiyle devam edin veya videoyu yeniden çekin.',
+        );
+        setPhase('review');
+        return;
+      }
+
       const newMask = emptySectorMask();
       for (const s of newSources) {
         if (s.sectorIndex != null) newMask[s.sectorIndex] = true;
       }
 
-      setSources((prev) => [...prev, ...newSources]);
-      setSectorMask((prev) => mergeMasks(prev, newMask));
+      setSources((prev) => mergeCaptureSources(prev, newSources));
+      const mergedMask = mergeMasks(sectorMask, newMask);
+      setSectorMask(mergedMask);
       if (!primaryUri && newSources[0]) setPrimaryUri(newSources[0].uri);
 
       setPhase('review');
@@ -256,9 +346,13 @@ export function GuidedCamera({ sceneName, nextSceneName, onComplete, onClose }: 
         yawDeg: currentYawRel,
         sectorIndex: targetSector,
       };
-      setSources((prev) => [...prev, src]);
-      setSectorMask((prev) => markSector(prev, targetSector));
+      setSources((prev) => mergeCaptureSources(prev, [src]));
+      const nextMask = markSector(sectorMask, targetSector);
+      setSectorMask(nextMask);
       if (!primaryUri) setPrimaryUri(photo.uri);
+      if (isFullCoverage(nextMask)) {
+        setTimeout(() => setPhase('review'), 180);
+      }
     } catch (e) {
       Alert.alert('Hata', 'Fotoğraf çekilemedi');
     } finally {
@@ -302,11 +396,10 @@ export function GuidedCamera({ sceneName, nextSceneName, onComplete, onClose }: 
     try {
       const photo = await cameraRef.current.takePictureAsync({ quality: 0.88 });
       if (photo?.uri) {
-        const full = Array(SECTOR_COUNT).fill(true) as boolean[];
         onComplete({
           primaryUri: photo.uri,
-          sources: [{ uri: photo.uri, sectorIndex: 0 }],
-          sectorMask: full,
+          sources: [{ uri: photo.uri }],
+          sectorMask: emptySectorMask(),
           mediaType: 'camera',
         });
       }
@@ -322,6 +415,14 @@ export function GuidedCamera({ sceneName, nextSceneName, onComplete, onClose }: 
       return;
     }
     const mask = sectorMask.length === SECTOR_COUNT ? sectorMask : emptySectorMask();
+    const hasGuidedCoverage = mask.some(Boolean);
+    if (Platform.OS !== 'web' && hasGuidedCoverage && !isFullCoverage(mask)) {
+      Alert.alert(
+        '360° tarama eksik',
+        'Kaydetmeden önce eksik yönleri tamamlayın veya videoyu yeniden çekin.',
+      );
+      return;
+    }
     onComplete({
       primaryUri: primary,
       sources: sources.length ? sources : [{ uri: primary }],
@@ -352,6 +453,11 @@ export function GuidedCamera({ sceneName, nextSceneName, onComplete, onClose }: 
     );
   }
 
+  const capturedCount = sectorMask.filter(Boolean).length;
+  const hasPrimary = !!(primaryUri ?? sources[0]?.uri);
+  const canFinishReview =
+    hasPrimary && (Platform.OS === 'web' || !sectorMask.some(Boolean) || isFullCoverage(sectorMask));
+
   return (
     <View style={styles.container}>
       {phase !== 'review' && (
@@ -367,6 +473,9 @@ export function GuidedCamera({ sceneName, nextSceneName, onComplete, onClose }: 
                 <Text style={styles.topCloseBtnText}>✕</Text>
               </TouchableOpacity>
               <View style={styles.topInfo}>
+                {roomProgressLabel ? (
+                  <Text style={styles.topProgressLabel}>{roomProgressLabel}</Text>
+                ) : null}
                 <Text style={styles.topSceneName}>{sceneName}</Text>
                 {nextSceneName ? (
                   <Text style={styles.topNextHint}>Sonraki oda: {nextSceneName}</Text>
@@ -381,6 +490,11 @@ export function GuidedCamera({ sceneName, nextSceneName, onComplete, onClose }: 
                 <Text style={styles.phaseBody}>
                   Telefonu yatay tutun ve düz çevirin. Yeşil olduğunda devam edin.
                 </Text>
+                {shouldResumeCapture ? (
+                  <Text style={styles.resumeHint}>
+                    Bu odada {resumeMask.filter(Boolean).length}/{SECTOR_COUNT} yön kayıtlı. Eksik yönlerden devam edeceksiniz.
+                  </Text>
+                ) : null}
                 <View style={[styles.levelBadge, isLevel && styles.levelBadgeOk]}>
                   <Text style={styles.levelBadgeText}>
                     {Platform.OS === 'web' ? 'Web: sensör yok, devam edebilirsiniz' : isLevel ? 'Hazır' : 'Hizalanıyor...'}
@@ -427,6 +541,9 @@ export function GuidedCamera({ sceneName, nextSceneName, onComplete, onClose }: 
                   <CoverageRing mask={sectorMask} activeSector={targetSector} />
                 </View>
                 <View style={styles.hintContainer}>
+                  <Text style={styles.captureProgressText}>
+                    {capturedCount}/{SECTOR_COUNT} yön tamamlandı
+                  </Text>
                   <Text style={styles.hintMain}>
                     {targetSector == null
                       ? 'Tüm yönler tamam — Özeti açın'
@@ -450,7 +567,11 @@ export function GuidedCamera({ sceneName, nextSceneName, onComplete, onClose }: 
                   </View>
                 </View>
                 <View style={styles.bottomBar}>
-                  <TouchableOpacity style={styles.secondaryBtn} onPress={() => setPhase('review')}>
+                  <TouchableOpacity
+                    style={[styles.secondaryBtn, capturedCount === 0 && styles.secondaryBtnDisabled]}
+                    onPress={() => setPhase('review')}
+                    disabled={capturedCount === 0}
+                  >
                     <Text style={styles.secondaryBtnText}>Özet</Text>
                   </TouchableOpacity>
                   <Animated.View style={{ transform: [{ scale: pulseAnim }] }}>
@@ -529,19 +650,32 @@ export function GuidedCamera({ sceneName, nextSceneName, onComplete, onClose }: 
               ))}
             </ScrollView>
             <View style={styles.reviewActions}>
-              {sweepMode === 'photo' && !isFullCoverage(sectorMask) && (
+              {sweepMode === 'photo' && !canFinishReview && (
                 <TouchableOpacity
                   style={styles.secondaryBtnWide}
-                  onPress={() => {
-                    beginSweepReference();
-                    setPhase('sweep_photo');
-                  }}
+                  onPress={continueWithPhotoSweep}
                 >
                   <Text style={styles.secondaryBtnText}>Eksikleri çek</Text>
                 </TouchableOpacity>
               )}
-              <TouchableOpacity style={styles.primaryBtnWide} onPress={finishReview}>
-                <Text style={styles.primaryBtnText}>Kaydet ve bitir</Text>
+              {sweepMode === 'video' && !canFinishReview ? (
+                <>
+                  <TouchableOpacity style={styles.secondaryBtnWide} onPress={continueWithPhotoSweep}>
+                    <Text style={styles.secondaryBtnText}>Eksikleri fotoğrafla tamamla</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity style={styles.secondaryBtnWide} onPress={restartVideoSweep}>
+                    <Text style={styles.secondaryBtnText}>Videoyu yeniden çek</Text>
+                  </TouchableOpacity>
+                </>
+              ) : null}
+              <TouchableOpacity
+                style={[styles.primaryBtnWide, !canFinishReview && styles.primaryBtnDisabled]}
+                onPress={finishReview}
+                disabled={!canFinishReview}
+              >
+                <Text style={styles.primaryBtnText}>
+                  {nextSceneName ? 'Kaydet ve sonraki odaya geç' : 'Kaydet ve bitir'}
+                </Text>
               </TouchableOpacity>
             </View>
           </ScrollView>
@@ -578,6 +712,7 @@ const styles = StyleSheet.create({
   },
   topCloseBtnText: { color: '#fff', fontSize: 18, fontWeight: '600' },
   topInfo: { flex: 1, alignItems: 'center' },
+  topProgressLabel: { color: '#c4b5fd', fontSize: 11, fontWeight: '700', marginBottom: 2 },
   topSceneName: { color: '#fff', fontSize: 16, fontWeight: '600' },
   topNextHint: { color: '#9ca3af', fontSize: 12, marginTop: 2 },
   panel: {
@@ -597,6 +732,7 @@ const styles = StyleSheet.create({
   },
   levelBadgeOk: { backgroundColor: '#14532d88' },
   levelBadgeText: { color: '#e5e7eb', textAlign: 'center' },
+  resumeHint: { color: '#c4b5fd', fontSize: 13, lineHeight: 18, marginBottom: 10 },
   primaryBtn: {
     backgroundColor: '#8b5cf6',
     borderRadius: 12,
@@ -615,6 +751,7 @@ const styles = StyleSheet.create({
   choiceSub: { color: '#9ca3af', fontSize: 13, marginTop: 4 },
   ringWrap: { alignItems: 'center', marginTop: 8, marginBottom: 100 },
   hintContainer: { alignItems: 'center', paddingHorizontal: 16 },
+  captureProgressText: { color: '#c4b5fd', fontSize: 12, fontWeight: '700', marginBottom: 6 },
   hintMain: { color: '#fff', fontSize: 15, fontWeight: '600', textAlign: 'center' },
   hintSub: { color: '#6b7280', fontSize: 12, marginTop: 4 },
   shutterToggleRow: {
@@ -634,6 +771,7 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(0,0,0,0.45)',
   },
   secondaryBtn: { padding: 12 },
+  secondaryBtnDisabled: { opacity: 0.35 },
   secondaryBtnText: { color: '#c4b5fd', fontSize: 14, fontWeight: '600' },
   captureBtn: {
     width: 72,

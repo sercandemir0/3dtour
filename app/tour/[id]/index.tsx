@@ -79,7 +79,9 @@ function SceneCard({
       )}
       {hasMedia && (
         <TouchableOpacity style={styles.recaptureBtn} onPress={onCapture} hitSlop={8}>
-          <Text style={styles.recaptureBtnText}>↻</Text>
+          <Text style={styles.recaptureBtnText}>
+            {cov.hasGuidedData && cov.incomplete ? '→' : '↻'}
+          </Text>
         </TouchableOpacity>
       )}
     </TouchableOpacity>
@@ -268,11 +270,11 @@ export default function TourDetailScreen() {
 
   const scenes = currentTour.scenes ?? [];
   const { completed, total } = getCompletedCount(currentTour.id);
-  const allDone = completed === total && total > 0;
   const coverageIncompleteCount = scenes.filter((s) => {
     const g = getCoverageSummary(s);
     return g.hasGuidedData && g.incomplete;
   }).length;
+  const allDone = completed === total && total > 0 && coverageIncompleteCount === 0;
 
   return (
     <>

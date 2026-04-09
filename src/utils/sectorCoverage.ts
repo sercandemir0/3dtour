@@ -78,6 +78,9 @@ export function getCoverageSummary(scene: Scene): {
     return { hasGuidedData: false, filled: 0, total: SECTOR_COUNT, incomplete: false };
   }
   const filled = filledSectorCount(mask);
+  if (filled === 0) {
+    return { hasGuidedData: false, filled: 0, total: SECTOR_COUNT, incomplete: false };
+  }
   return {
     hasGuidedData: true,
     filled,
@@ -101,11 +104,7 @@ export function mapFramesToSectors(
   yawSamples: { atMs: number; yawRelDeg: number }[],
 ): { uri: string; timeMs: number; sectorIndex: number; yawDeg: number }[] {
   if (yawSamples.length === 0) {
-    return frames.map((f, i) => ({
-      ...f,
-      sectorIndex: i % SECTOR_COUNT,
-      yawDeg: sectorCenterDeg(i % SECTOR_COUNT),
-    }));
+    return [];
   }
 
   return frames.map((f) => {
