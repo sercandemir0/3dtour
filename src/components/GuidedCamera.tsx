@@ -10,6 +10,7 @@ import {
   Image,
   ActivityIndicator,
   Alert,
+  Switch,
 } from 'react-native';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import { DeviceMotion } from 'expo-sensors';
@@ -70,12 +71,16 @@ export function GuidedCamera({ sceneName, nextSceneName, onComplete, onClose }: 
   const [primaryUri, setPrimaryUri] = useState<string | null>(null);
 
   const [capturing, setCapturing] = useState(false);
+  /** When false, aligned hold triggers automatic capture (native photo sweep only). */
+  const [manualShutter, setManualShutter] = useState(false);
   const [isRecording, setIsRecording] = useState(false);
   const [processingVideo, setProcessingVideo] = useState(false);
   const recordingPromiseRef = useRef<Promise<{ uri: string } | undefined> | null>(null);
   const yawSamplesRef = useRef<{ atMs: number; yawRelDeg: number }[]>([]);
   const recordStartRef = useRef(0);
   const yawPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const autoShutterTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const takeSectorPhotoRef = useRef<() => Promise<void>>(async () => {});
 
   const pulseAnim = useRef(new Animated.Value(1)).current;
 
@@ -88,6 +93,9 @@ export function GuidedCamera({ sceneName, nextSceneName, onComplete, onClose }: 
     const i = sectorMask.findIndex((v) => !v);
     return i >= 0 ? i : null;
   })();
+
+  const aligned =
+    targetSector != null && isYawAlignedToSector(currentYawRel, targetSector);
 
   useEffect(() => {
     let sub: ReturnType<typeof DeviceMotion.addListener> | null = null;
@@ -258,6 +266,36 @@ export function GuidedCamera({ sceneName, nextSceneName, onComplete, onClose }: 
     }
   };
 
+  takeSectorPhotoRef.current = takeSectorPhoto;
+
+  useEffect(() => {
+    if (
+      Platform.OS === 'web' ||
+      phase !== 'sweep_photo' ||
+      manualShutter ||
+      !aligned ||
+      targetSector == null ||
+      capturing ||
+      !cameraReady
+    ) {
+      if (autoShutterTimerRef.current) {
+        clearTimeout(autoShutterTimerRef.current);
+        autoShutterTimerRef.current = null;
+      }
+      return;
+    }
+    autoShutterTimerRef.current = setTimeout(() => {
+      autoShutterTimerRef.current = null;
+      void takeSectorPhotoRef.current();
+    }, 750);
+    return () => {
+      if (autoShutterTimerRef.current) {
+        clearTimeout(autoShutterTimerRef.current);
+        autoShutterTimerRef.current = null;
+      }
+    };
+  }, [phase, manualShutter, aligned, targetSector, capturing, cameraReady]);
+
   const webSingleCapture = async () => {
     if (!cameraRef.current || capturing) return;
     setCapturing(true);
@@ -314,9 +352,6 @@ export function GuidedCamera({ sceneName, nextSceneName, onComplete, onClose }: 
     );
   }
 
-  const aligned =
-    targetSector != null && isYawAlignedToSector(currentYawRel, targetSector);
-
   return (
     <View style={styles.container}>
       {phase !== 'review' && (
@@ -366,7 +401,9 @@ export function GuidedCamera({ sceneName, nextSceneName, onComplete, onClose }: 
                 <Text style={styles.phaseTitle}>2. Tarama modu</Text>
                 <TouchableOpacity style={styles.choiceBtn} onPress={pickPhotoSweep}>
                   <Text style={styles.choiceTitle}>Fotoğraf ile tarama</Text>
-                  <Text style={styles.choiceSub}>Her yöne dönüp kare çekin (6 yön)</Text>
+                  <Text style={styles.choiceSub}>
+                    Her yöne hizalayın; sabit tutunca otomatik kare (veya manuel deklanşör)
+                  </Text>
                 </TouchableOpacity>
                 <TouchableOpacity style={styles.choiceBtn} onPress={pickVideoSweep}>
                   <Text style={styles.choiceTitle}>Video ile tarama</Text>
@@ -393,9 +430,24 @@ export function GuidedCamera({ sceneName, nextSceneName, onComplete, onClose }: 
                   <Text style={styles.hintMain}>
                     {targetSector == null
                       ? 'Tüm yönler tamam — Özeti açın'
-                      : `Hedef: ${SECTOR_LABELS_TR[targetSector]} — ${aligned ? 'Çekin' : 'Yöneyi hizalayın'}`}
+                      : `Hedef: ${SECTOR_LABELS_TR[targetSector]} — ${
+                          aligned
+                            ? manualShutter
+                              ? 'Çekin'
+                              : 'Sabit tutun — otomatik çekilecek'
+                            : 'Yönü hizalayın'
+                        }`}
                   </Text>
                   <Text style={styles.hintSub}>Göreli yaw: {Math.round(currentYawRel)}°</Text>
+                  <View style={styles.shutterToggleRow}>
+                    <Text style={styles.shutterToggleLabel}>Manuel deklanşör</Text>
+                    <Switch
+                      value={manualShutter}
+                      onValueChange={setManualShutter}
+                      trackColor={{ false: '#4b5563', true: '#6d28d9' }}
+                      thumbColor={manualShutter ? '#e9d5ff' : '#9ca3af'}
+                    />
+                  </View>
                 </View>
                 <View style={styles.bottomBar}>
                   <TouchableOpacity style={styles.secondaryBtn} onPress={() => setPhase('review')}>
@@ -565,6 +617,14 @@ const styles = StyleSheet.create({
   hintContainer: { alignItems: 'center', paddingHorizontal: 16 },
   hintMain: { color: '#fff', fontSize: 15, fontWeight: '600', textAlign: 'center' },
   hintSub: { color: '#6b7280', fontSize: 12, marginTop: 4 },
+  shutterToggleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 10,
+    marginTop: 12,
+  },
+  shutterToggleLabel: { color: '#9ca3af', fontSize: 13 },
   bottomBar: {
     flexDirection: 'row',
     justifyContent: 'space-between',

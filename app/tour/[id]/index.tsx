@@ -86,8 +86,6 @@ function SceneCard({
   );
 }
 
-type CaptureOption = 'camera' | 'gallery_photo' | 'gallery_video';
-
 export default function TourDetailScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const {
@@ -96,7 +94,9 @@ export default function TourDetailScreen() {
     getCompletedCount,
   } = useTourStore();
 
-  const [captureModalScene, setCaptureModalScene] = useState<Scene | null>(null);
+  const [galleryModal, setGalleryModal] = useState<
+    null | { step: 'rooms' } | { step: 'kind'; scene: Scene }
+  >(null);
   const [busy, setBusy] = useState(false);
   const [videoPickerData, setVideoPickerData] = useState<{ sceneId: string; uri: string } | null>(null);
   const scrollRef = useRef<ScrollView>(null);
@@ -105,54 +105,67 @@ export default function TourDetailScreen() {
     if (id) fetchTour(id);
   }, [id]);
 
-  const handleCaptureOption = async (scene: Scene, option: CaptureOption) => {
-    setCaptureModalScene(null);
+  const openGuidedCamera = (scene: Scene) => {
+    router.push(
+      `/tour/${id}/camera?sceneId=${scene.id}&sceneName=${encodeURIComponent(scene.name)}`,
+    );
+  };
+
+  const handleGalleryPhoto = async (scene: Scene) => {
+    setGalleryModal(null);
     setBusy(true);
-
     try {
-      if (option === 'camera') {
-        router.push(`/tour/${id}/camera?sceneId=${scene.id}&sceneName=${encodeURIComponent(scene.name)}`);
-        setBusy(false);
+      const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
+      if (!perm.granted) {
+        Alert.alert('İzin gerekli', 'Galeri erişim izni verin.');
         return;
       }
-
-      if (option === 'gallery_photo') {
-        const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
-        if (!perm.granted) {
-          Alert.alert('İzin gerekli', 'Galeri erişim izni verin.');
-          return;
-        }
-        const result = await ImagePicker.launchImageLibraryAsync({
-          mediaTypes: ['images'],
-          quality: 1,
-        });
-        if (!result.canceled && result.assets[0]) {
-          await setSceneMedia(scene.id, result.assets[0].uri, 'photo');
-          await fetchTour(id!);
-        }
-        return;
-      }
-
-      if (option === 'gallery_video') {
-        const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
-        if (!perm.granted) {
-          Alert.alert('İzin gerekli', 'Galeri erişim izni verin.');
-          return;
-        }
-        const result = await ImagePicker.launchImageLibraryAsync({
-          mediaTypes: ['videos'],
-          quality: 1,
-        });
-        if (!result.canceled && result.assets[0]) {
-          setVideoPickerData({ sceneId: scene.id, uri: result.assets[0].uri });
-        }
-        return;
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ['images'],
+        quality: 1,
+      });
+      if (!result.canceled && result.assets[0]) {
+        await setSceneMedia(scene.id, result.assets[0].uri, 'photo');
+        await fetchTour(id!);
       }
     } catch (e: any) {
       Alert.alert('Hata', e.message ?? 'İşlem başarısız');
     } finally {
       setBusy(false);
     }
+  };
+
+  const handleGalleryVideo = async (scene: Scene) => {
+    setGalleryModal(null);
+    setBusy(true);
+    try {
+      const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
+      if (!perm.granted) {
+        Alert.alert('İzin gerekli', 'Galeri erişim izni verin.');
+        return;
+      }
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ['videos'],
+        quality: 1,
+      });
+      if (!result.canceled && result.assets[0]) {
+        setVideoPickerData({ sceneId: scene.id, uri: result.assets[0].uri });
+      }
+    } catch (e: any) {
+      Alert.alert('Hata', e.message ?? 'İşlem başarısız');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const openAdvancedMenu = () => {
+    Alert.alert('Gelişmiş', 'Toplu galeri ataması boş odalara sırayla fotoğraf yerleştirir.', [
+      { text: 'İptal', style: 'cancel' },
+      {
+        text: 'Toplu fotoğraf ata',
+        onPress: () => handleBulkGallery(),
+      },
+    ]);
   };
 
   const handleBulkGallery = async () => {
@@ -279,8 +292,16 @@ export default function TourDetailScreen() {
           completed={completed}
           total={total}
           onPressIncomplete={() => {
-            const firstEmpty = scenes.findIndex((s) => !s.panorama_url);
-            if (firstEmpty >= 0) setCaptureModalScene(scenes[firstEmpty]);
+            const firstEmpty = scenes.find((s) => !s.panorama_url);
+            if (firstEmpty) {
+              openGuidedCamera(firstEmpty);
+              return;
+            }
+            const covInc = scenes.find((s) => {
+              const g = getCoverageSummary(s);
+              return g.hasGuidedData && g.incomplete;
+            });
+            if (covInc) openGuidedCamera(covInc);
           }}
           coverageHint={
             coverageIncompleteCount > 0
@@ -323,7 +344,7 @@ export default function TourDetailScreen() {
               <SceneCard
                 key={scene.id}
                 scene={scene}
-                onCapture={() => setCaptureModalScene(scene)}
+                onCapture={() => openGuidedCamera(scene)}
                 onPreview={() => {
                   const idx = scenes.filter((s) => s.panorama_url).findIndex((s) => s.id === scene.id);
                   if (idx >= 0) router.push(`/tour/${id}/viewer?startScene=${idx}`);
@@ -335,14 +356,11 @@ export default function TourDetailScreen() {
 
         <View style={styles.bottomActions}>
           <TouchableOpacity
-            style={styles.bulkButton}
-            onPress={handleBulkGallery}
-            disabled={busy}
-            activeOpacity={0.8}
+            style={styles.galleryImportLink}
+            onPress={() => setGalleryModal({ step: 'rooms' })}
+            activeOpacity={0.7}
           >
-            <Text style={styles.bulkButtonText}>
-              {busy ? 'Yükleniyor...' : '🖼 Eksiklere toplu fotoğraf ata'}
-            </Text>
+            <Text style={styles.galleryImportLinkText}>Galeriden içe aktar (foto veya video)</Text>
           </TouchableOpacity>
 
           <TouchableOpacity
@@ -351,6 +369,15 @@ export default function TourDetailScreen() {
             activeOpacity={0.8}
           >
             <Text style={styles.addRoomBtnText}>+ Yeni oda ekle</Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={styles.advancedLink}
+            onPress={openAdvancedMenu}
+            disabled={busy}
+            activeOpacity={0.7}
+          >
+            <Text style={styles.advancedLinkText}>Gelişmiş: toplu galeri ataması</Text>
           </TouchableOpacity>
         </View>
       </ScrollView>
@@ -369,64 +396,78 @@ export default function TourDetailScreen() {
         onCancel={() => setVideoPickerData(null)}
       />
 
-      {/* Capture option modal */}
+      {/* Galeri içe aktarma: önce oda, sonra tür */}
       <Modal
-        visible={!!captureModalScene}
+        visible={galleryModal != null}
         transparent
         animationType="slide"
-        onRequestClose={() => setCaptureModalScene(null)}
+        onRequestClose={() => setGalleryModal(null)}
       >
         <TouchableOpacity
           style={styles.modalOverlay}
           activeOpacity={1}
-          onPress={() => setCaptureModalScene(null)}
+          onPress={() => setGalleryModal(null)}
         >
-          <View style={styles.modalSheet}>
-            <View style={styles.modalHandle} />
-            <Text style={styles.modalTitle}>
-              {captureModalScene?.name ?? 'Oda'} — Çekim Yöntemi
-            </Text>
-
-            <TouchableOpacity
-              style={styles.modalOption}
-              onPress={() => captureModalScene && handleCaptureOption(captureModalScene, 'camera')}
-            >
-              <Text style={styles.modalOptionIcon}>📸</Text>
-              <View style={styles.modalOptionContent}>
-                <Text style={styles.modalOptionTitle}>Kamera ile Çek</Text>
-                <Text style={styles.modalOptionSub}>Rehberli 360° çekim</Text>
-              </View>
-            </TouchableOpacity>
-
-            <TouchableOpacity
-              style={styles.modalOption}
-              onPress={() => captureModalScene && handleCaptureOption(captureModalScene, 'gallery_photo')}
-            >
-              <Text style={styles.modalOptionIcon}>🖼</Text>
-              <View style={styles.modalOptionContent}>
-                <Text style={styles.modalOptionTitle}>Galeriden Fotoğraf</Text>
-                <Text style={styles.modalOptionSub}>Mevcut panoramik fotoğraf seçin</Text>
-              </View>
-            </TouchableOpacity>
-
-            <TouchableOpacity
-              style={styles.modalOption}
-              onPress={() => captureModalScene && handleCaptureOption(captureModalScene, 'gallery_video')}
-            >
-              <Text style={styles.modalOptionIcon}>🎬</Text>
-              <View style={styles.modalOptionContent}>
-                <Text style={styles.modalOptionTitle}>Video Yükle</Text>
-                <Text style={styles.modalOptionSub}>Videodan sahne oluşturun</Text>
-              </View>
-            </TouchableOpacity>
-
-            <TouchableOpacity
-              style={styles.modalCancel}
-              onPress={() => setCaptureModalScene(null)}
-            >
-              <Text style={styles.modalCancelText}>İptal</Text>
-            </TouchableOpacity>
-          </View>
+          <TouchableOpacity activeOpacity={1} onPress={(e) => e.stopPropagation()}>
+            <View style={styles.modalSheet}>
+              <View style={styles.modalHandle} />
+              {galleryModal?.step === 'rooms' && (
+                <>
+                  <Text style={styles.modalTitle}>Hangi odaya?</Text>
+                  <Text style={styles.modalSubtitle}>
+                    Rehberli çekim için oda kartına dokunun. Burası galeriden tek dosya içindir.
+                  </Text>
+                  <ScrollView style={styles.roomPickList} nestedScrollEnabled>
+                    {scenes.map((s) => (
+                      <TouchableOpacity
+                        key={s.id}
+                        style={styles.roomPickRow}
+                        onPress={() => setGalleryModal({ step: 'kind', scene: s })}
+                      >
+                        <Text style={styles.roomPickName}>{s.name}</Text>
+                        <Text style={styles.roomPickArrow}>›</Text>
+                      </TouchableOpacity>
+                    ))}
+                  </ScrollView>
+                </>
+              )}
+              {galleryModal?.step === 'kind' && (
+                <>
+                  <Text style={styles.modalTitle}>{galleryModal.scene.name}</Text>
+                  <Text style={styles.modalSubtitle}>İçe aktarma türü</Text>
+                  <TouchableOpacity
+                    style={styles.modalOption}
+                    onPress={() => handleGalleryPhoto(galleryModal.scene)}
+                  >
+                    <Text style={styles.modalOptionIcon}>🖼</Text>
+                    <View style={styles.modalOptionContent}>
+                      <Text style={styles.modalOptionTitle}>Fotoğraf seç</Text>
+                      <Text style={styles.modalOptionSub}>Galeriden panoramik görsel</Text>
+                    </View>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={styles.modalOption}
+                    onPress={() => handleGalleryVideo(galleryModal.scene)}
+                  >
+                    <Text style={styles.modalOptionIcon}>🎬</Text>
+                    <View style={styles.modalOptionContent}>
+                      <Text style={styles.modalOptionTitle}>Video seç</Text>
+                      <Text style={styles.modalOptionSub}>Kare seçerek sahneye aktar</Text>
+                    </View>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={styles.modalBack}
+                    onPress={() => setGalleryModal({ step: 'rooms' })}
+                  >
+                    <Text style={styles.modalBackText}>← Oda seçimine dön</Text>
+                  </TouchableOpacity>
+                </>
+              )}
+              <TouchableOpacity style={styles.modalCancel} onPress={() => setGalleryModal(null)}>
+                <Text style={styles.modalCancelText}>Kapat</Text>
+              </TouchableOpacity>
+            </View>
+          </TouchableOpacity>
         </TouchableOpacity>
       </Modal>
     </>
@@ -488,11 +529,10 @@ const styles = StyleSheet.create({
   },
   recaptureBtnText: { color: '#fff', fontSize: 16 },
   bottomActions: { marginTop: 20, gap: 10 },
-  bulkButton: {
-    backgroundColor: '#1e1e3a', borderRadius: 12, padding: 16, alignItems: 'center',
-    borderWidth: 1, borderColor: '#8b5cf644', borderStyle: 'dashed',
-  },
-  bulkButtonText: { color: '#8b5cf6', fontSize: 15, fontWeight: '600' },
+  galleryImportLink: { paddingVertical: 12, alignItems: 'center' },
+  galleryImportLinkText: { color: '#8b5cf6', fontSize: 15, fontWeight: '600' },
+  advancedLink: { paddingVertical: 8, alignItems: 'center' },
+  advancedLinkText: { color: '#6b7280', fontSize: 13 },
   addRoomBtn: {
     backgroundColor: '#1e1e3a', borderRadius: 12, padding: 14, alignItems: 'center',
     borderWidth: 1, borderColor: '#2d2d5e',
@@ -508,7 +548,22 @@ const styles = StyleSheet.create({
     width: 40, height: 4, borderRadius: 2, backgroundColor: '#4b5563',
     alignSelf: 'center', marginBottom: 16,
   },
-  modalTitle: { color: '#fff', fontSize: 18, fontWeight: '700', marginBottom: 20 },
+  modalTitle: { color: '#fff', fontSize: 18, fontWeight: '700', marginBottom: 8 },
+  modalSubtitle: { color: '#9ca3af', fontSize: 13, lineHeight: 18, marginBottom: 16 },
+  roomPickList: { maxHeight: 280, marginBottom: 8 },
+  roomPickRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: '#2d2d5e',
+    borderRadius: 12,
+    padding: 14,
+    marginBottom: 8,
+  },
+  roomPickName: { color: '#fff', fontSize: 15, fontWeight: '500', flex: 1 },
+  roomPickArrow: { color: '#6b7280', fontSize: 20, marginLeft: 8 },
+  modalBack: { paddingVertical: 12, alignItems: 'center', marginBottom: 4 },
+  modalBackText: { color: '#8b5cf6', fontSize: 14, fontWeight: '600' },
   modalOption: {
     flexDirection: 'row', alignItems: 'center', gap: 14,
     backgroundColor: '#2d2d5e', borderRadius: 14, padding: 16, marginBottom: 10,
