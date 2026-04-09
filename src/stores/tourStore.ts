@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import type { Tour, Scene, Hotspot, CaptureMode } from '@/src/types/tour';
+import type { Tour, Scene, Hotspot, CaptureMode, SceneMediaType } from '@/src/types/tour';
 
 const STORAGE_KEY = '@3dtour_tours';
 
@@ -23,15 +23,26 @@ interface TourState {
   fetchTours: () => Promise<void>;
   fetchTour: (id: string) => Promise<void>;
   createTour: (title: string, captureMode: CaptureMode, description?: string) => Promise<Tour>;
+  createTourWithRooms: (
+    title: string,
+    captureMode: CaptureMode,
+    roomNames: string[],
+    description?: string,
+  ) => Promise<Tour>;
   updateTour: (id: string, updates: Partial<Tour>) => Promise<void>;
   deleteTour: (id: string) => Promise<void>;
 
   addScene: (tourId: string, name: string, sceneType: Scene['scene_type']) => Promise<Scene>;
   updateScene: (id: string, updates: Partial<Scene>) => Promise<void>;
   deleteScene: (id: string) => Promise<void>;
+  setSceneMedia: (sceneId: string, uri: string, mediaType: SceneMediaType) => Promise<void>;
+  reorderScenes: (tourId: string, sceneIds: string[]) => Promise<void>;
 
   addHotspot: (hotspot: Omit<Hotspot, 'id' | 'created_at'>) => Promise<Hotspot>;
   deleteHotspot: (id: string) => Promise<void>;
+
+  getIncompleteScenes: (tourId: string) => Scene[];
+  getCompletedCount: (tourId: string) => { completed: number; total: number };
 }
 
 async function saveTours(tours: Tour[]) {
@@ -82,6 +93,55 @@ export const useTourStore = create<TourState>((set, get) => ({
     return tour;
   },
 
+  createTourWithRooms: async (title, captureMode, roomNames, description) => {
+    const now = new Date().toISOString();
+    const tourId = uuid();
+    const sceneType = captureMode === 'gaussian_splat'
+      ? 'gaussian_splat' as const
+      : captureMode === 'roomplan'
+        ? 'roomplan' as const
+        : 'panorama' as const;
+
+    const scenes: Scene[] = roomNames.map((name, i) => ({
+      id: uuid(),
+      tour_id: tourId,
+      name,
+      scene_type: sceneType,
+      media_type: null,
+      panorama_url: null,
+      splat_url: null,
+      roomplan_url: null,
+      thumbnail_url: null,
+      order: i,
+      initial_yaw: 0,
+      initial_pitch: 0,
+      initial_fov: 100,
+      camera_position: null,
+      camera_target: null,
+      created_at: now,
+      hotspots: [],
+    }));
+
+    const tour: Tour = {
+      id: tourId,
+      user_id: 'local',
+      title,
+      description: description ?? null,
+      cover_image_url: null,
+      capture_mode: captureMode,
+      status: 'draft',
+      share_slug: generateSlug(),
+      created_at: now,
+      updated_at: now,
+      scenes,
+    };
+
+    const tours = [tour, ...get().tours];
+    await saveTours(tours);
+    set({ tours });
+    return tour;
+  },
+
   updateTour: async (id, updates) => {
     const tours = get().tours.map((t) =>
       t.id === id ? { ...t, ...updates, updated_at: new Date().toISOString() } : t
@@ -114,6 +174,7 @@ export const useTourStore = create<TourState>((set, get) => ({
       tour_id: tourId,
       name,
       scene_type: sceneType,
+      media_type: null,
       panorama_url: null,
       splat_url: null,
       roomplan_url: null,
@@ -229,5 +290,49 @@ export const useTourStore = create<TourState>((set, get) => ({
         },
       });
     }
+  },
+
+  setSceneMedia: async (sceneId, uri, mediaType) => {
+    const updates: Partial<Scene> = {
+      panorama_url: uri,
+      thumbnail_url: uri,
+      media_type: mediaType,
+    };
+    await get().updateScene(sceneId, updates);
+  },
+
+  reorderScenes: async (tourId, sceneIds) => {
+    const tours = get().tours.map((t) => {
+      if (t.id !== tourId) return t;
+      const reordered = sceneIds
+        .map((sid, i) => {
+          const scene = t.scenes?.find((s) => s.id === sid);
+          return scene ? { ...scene, order: i } : null;
+        })
+        .filter(Boolean) as Scene[];
+      return { ...t, scenes: reordered };
+    });
+    await saveTours(tours);
+    const currentTour = get().currentTour;
+    set({
+      tours,
+      currentTour: currentTour?.id === tourId
+        ? tours.find((t) => t.id === tourId) ?? null
+        : currentTour,
+    });
+  },
+
+  getIncompleteScenes: (tourId) => {
+    const tour = get().tours.find((t) => t.id === tourId);
+    return (tour?.scenes ?? []).filter((s) => !s.panorama_url);
+  },
+
+  getCompletedCount: (tourId) => {
+    const tour = get().tours.find((t) => t.id === tourId);
+    const scenes = tour?.scenes ?? [];
+    return {
+      completed: scenes.filter((s) => s.panorama_url).length,
+      total: scenes.length,
+    };
   },
 }));

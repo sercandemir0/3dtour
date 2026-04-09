@@ -32,6 +32,21 @@ export default function RootLayout() {
             headerShown: false,
           }}
         />
+        <Stack.Screen
+          name="tour/[id]/camera"
+          options={{
+            title: 'Kamera',
+            headerShown: false,
+            presentation: 'fullScreenModal',
+          }}
+        />
+        <Stack.Screen
+          name="tour/[id]/hotspots"
+          options={{
+            title: 'Hotspot Düzenle',
+            presentation: 'modal',
+          }}
+        />
       </Stack>
     </>
   );

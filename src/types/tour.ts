@@ -1,6 +1,7 @@
 export type CaptureMode = 'panorama' | 'gaussian_splat' | 'roomplan';
 export type TourStatus = 'draft' | 'processing' | 'published' | 'archived';
 export type SceneType = 'panorama' | 'gaussian_splat' | 'roomplan';
+export type SceneMediaType = 'photo' | 'video_frame' | 'camera' | null;
 export type HotspotIconType = 'navigate' | 'info' | 'link';
 export type JobType = 'panorama_stitch' | 'gaussian_splat' | 'video_extract';
 export type JobStatus = 'pending' | 'processing' | 'completed' | 'failed';
@@ -38,6 +39,7 @@ export interface Scene {
   tour_id: string;
   name: string;
   scene_type: SceneType;
+  media_type: SceneMediaType;
   panorama_url: string | null;
   splat_url: string | null;
   roomplan_url: string | null;
