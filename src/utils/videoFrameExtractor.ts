@@ -33,3 +33,35 @@ export async function extractFrames(
 
   return frames;
 }
+
+/**
+ * Tries multiple timestamps until enough frames or consecutive failures (short videos).
+ */
+export async function extractFramesAdaptive(
+  videoUri: string,
+  maxFrames: number = 14,
+  maxDurationMs: number = 120000,
+): Promise<ExtractedFrame[]> {
+  const frames: ExtractedFrame[] = [];
+  const seen = new Set<number>();
+  let consecutiveFail = 0;
+  const step = 400;
+
+  for (let timeMs = step; timeMs <= maxDurationMs && frames.length < maxFrames; timeMs += step) {
+    if (seen.has(timeMs)) continue;
+    seen.add(timeMs);
+    try {
+      const thumb = await VideoThumbnails.getThumbnailAsync(videoUri, {
+        time: timeMs,
+        quality: 0.75,
+      });
+      frames.push({ uri: thumb.uri, timeMs });
+      consecutiveFail = 0;
+    } catch {
+      consecutiveFail += 1;
+      if (consecutiveFail >= 6 && frames.length > 0) break;
+    }
+  }
+
+  return frames;
+}

@@ -1,8 +1,16 @@
 import { create } from 'zustand';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import type { Tour, Scene, Hotspot, CaptureMode, SceneMediaType } from '@/src/types/tour';
+import type {
+  Tour,
+  Scene,
+  Hotspot,
+  CaptureMode,
+  SceneMediaType,
+  SceneCaptureSource,
+} from '@/src/types/tour';
 
 const STORAGE_KEY = '@3dtour_tours';
+const COVERAGE_SECTOR_COUNT = 6;
 
 function uuid(): string {
   return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
@@ -36,6 +44,15 @@ interface TourState {
   updateScene: (id: string, updates: Partial<Scene>) => Promise<void>;
   deleteScene: (id: string) => Promise<void>;
   setSceneMedia: (sceneId: string, uri: string, mediaType: SceneMediaType) => Promise<void>;
+  commitSceneCapture: (
+    sceneId: string,
+    payload: {
+      primaryUri: string;
+      sources: SceneCaptureSource[];
+      sectorMask: boolean[];
+      mediaType: SceneMediaType;
+    },
+  ) => Promise<void>;
   reorderScenes: (tourId: string, sceneIds: string[]) => Promise<void>;
 
   addHotspot: (hotspot: Omit<Hotspot, 'id' | 'created_at'>) => Promise<Hotspot>;
@@ -297,6 +314,23 @@ export const useTourStore = create<TourState>((set, get) => ({
       panorama_url: uri,
       thumbnail_url: uri,
       media_type: mediaType,
+      capture_sources: undefined,
+      coverage_sector_mask: undefined,
+    };
+    await get().updateScene(sceneId, updates);
+  },
+
+  commitSceneCapture: async (sceneId, { primaryUri, sources, sectorMask, mediaType }) => {
+    const paddedMask = Array.from(
+      { length: COVERAGE_SECTOR_COUNT },
+      (_, i) => !!sectorMask[i],
+    );
+    const updates: Partial<Scene> = {
+      panorama_url: primaryUri,
+      thumbnail_url: primaryUri,
+      media_type: mediaType,
+      capture_sources: sources,
+      coverage_sector_mask: paddedMask,
     };
     await get().updateScene(sceneId, updates);
   },

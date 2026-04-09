@@ -20,6 +20,14 @@ export interface Profile {
   created_at: string;
 }
 
+/** One captured frame during guided sweep (photo or extracted from video). */
+export interface SceneCaptureSource {
+  uri: string;
+  yawDeg?: number;
+  atMs?: number;
+  sectorIndex?: number;
+}
+
 export interface Tour {
   id: string;
   user_id: string;
@@ -52,6 +60,10 @@ export interface Scene {
   camera_target: Vector3 | null;
   created_at: string;
   hotspots?: Hotspot[];
+  /** Raw captures from guided sweep; optional for legacy scenes. */
+  capture_sources?: SceneCaptureSource[];
+  /** Length 6: horizontal sector i covered if true (see sectorCoverage util). */
+  coverage_sector_mask?: boolean[];
 }
 
 export interface Hotspot {

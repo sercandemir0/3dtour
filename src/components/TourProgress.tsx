@@ -4,9 +4,11 @@ interface Props {
   completed: number;
   total: number;
   onPressIncomplete?: () => void;
+  /** Örn. "2 odada 360° kapsam eksik" */
+  coverageHint?: string | null;
 }
 
-export function TourProgress({ completed, total, onPressIncomplete }: Props) {
+export function TourProgress({ completed, total, onPressIncomplete, coverageHint }: Props) {
   const pct = total > 0 ? (completed / total) * 100 : 0;
   const allDone = completed === total && total > 0;
 
@@ -31,6 +33,7 @@ export function TourProgress({ completed, total, onPressIncomplete }: Props) {
           ]}
         />
       </View>
+      {coverageHint ? <Text style={styles.coverageHint}>{coverageHint}</Text> : null}
     </View>
   );
 }
@@ -58,5 +61,11 @@ const styles = StyleSheet.create({
   },
   barFillComplete: {
     backgroundColor: '#34d399',
+  },
+  coverageHint: {
+    color: '#fbbf24',
+    fontSize: 12,
+    marginTop: 8,
+    lineHeight: 16,
   },
 });

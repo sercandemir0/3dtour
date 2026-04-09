@@ -9,7 +9,6 @@ import {
   Alert,
   Image,
   Modal,
-  FlatList,
 } from 'react-native';
 import { useLocalSearchParams, router } from 'expo-router';
 import * as ImagePicker from 'expo-image-picker';
@@ -17,6 +16,7 @@ import { useTourStore } from '@/src/stores/tourStore';
 import { TourProgress } from '@/src/components/TourProgress';
 import { VideoFramePicker } from '@/src/components/VideoFramePicker';
 import type { Scene } from '@/src/types/tour';
+import { getCoverageSummary, SECTOR_COUNT } from '@/src/utils/sectorCoverage';
 
 const MODE_LABELS: Record<string, string> = {
   panorama: '360° Panorama',
@@ -34,6 +34,7 @@ function SceneCard({
   onPreview: () => void;
 }) {
   const hasMedia = !!scene.panorama_url;
+  const cov = getCoverageSummary(scene);
 
   return (
     <TouchableOpacity
@@ -57,6 +58,20 @@ function SceneCard({
         <View style={[styles.statusDot, hasMedia ? styles.statusDone : styles.statusEmpty]} />
         <Text style={styles.sceneName} numberOfLines={1}>{scene.name}</Text>
       </View>
+      {hasMedia && cov.hasGuidedData && (
+        <View style={styles.coverageBadge}>
+          <Text
+            style={[
+              styles.coverageBadgeText,
+              cov.incomplete ? styles.coverageBadgeWarn : styles.coverageBadgeOk,
+            ]}
+          >
+            {cov.incomplete
+              ? `360° ${cov.filled}/${SECTOR_COUNT}`
+              : `360° ✓`}
+          </Text>
+        </View>
+      )}
       {!hasMedia && (
         <View style={styles.captureOverlay}>
           <Text style={styles.captureOverlayText}>Çek</Text>
@@ -241,6 +256,10 @@ export default function TourDetailScreen() {
   const scenes = currentTour.scenes ?? [];
   const { completed, total } = getCompletedCount(currentTour.id);
   const allDone = completed === total && total > 0;
+  const coverageIncompleteCount = scenes.filter((s) => {
+    const g = getCoverageSummary(s);
+    return g.hasGuidedData && g.incomplete;
+  }).length;
 
   return (
     <>
@@ -263,6 +282,11 @@ export default function TourDetailScreen() {
             const firstEmpty = scenes.findIndex((s) => !s.panorama_url);
             if (firstEmpty >= 0) setCaptureModalScene(scenes[firstEmpty]);
           }}
+          coverageHint={
+            coverageIncompleteCount > 0
+              ? `${coverageIncompleteCount} odada 360° kapsam eksik — kamera ile tamamlayın`
+              : null
+          }
         />
 
         <View style={styles.actions}>
@@ -445,6 +469,13 @@ const styles = StyleSheet.create({
   statusDone: { backgroundColor: '#34d399' },
   statusEmpty: { backgroundColor: '#ef4444' },
   sceneName: { color: '#fff', fontSize: 14, fontWeight: '500', flex: 1 },
+  coverageBadge: {
+    paddingHorizontal: 10,
+    paddingBottom: 8,
+  },
+  coverageBadgeText: { fontSize: 11, fontWeight: '600' },
+  coverageBadgeWarn: { color: '#fbbf24' },
+  coverageBadgeOk: { color: '#34d399' },
   captureOverlay: {
     position: 'absolute', top: 0, left: 0, right: 0, height: 110,
     backgroundColor: 'rgba(139,92,246,0.15)', justifyContent: 'center', alignItems: 'center',

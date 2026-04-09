@@ -1,6 +1,6 @@
 import { useLocalSearchParams, router } from 'expo-router';
 import { useTourStore } from '@/src/stores/tourStore';
-import { GuidedCamera } from '@/src/components/GuidedCamera';
+import { GuidedCamera, type GuidedCapturePayload } from '@/src/components/GuidedCamera';
 
 export default function CameraScreen() {
   const { id, sceneId, sceneName } = useLocalSearchParams<{
@@ -9,15 +9,20 @@ export default function CameraScreen() {
     sceneName: string;
   }>();
 
-  const { currentTour, setSceneMedia, fetchTour } = useTourStore();
+  const { currentTour, commitSceneCapture, fetchTour } = useTourStore();
 
   const scenes = currentTour?.scenes ?? [];
   const currentIdx = scenes.findIndex((s) => s.id === sceneId);
   const nextEmpty = scenes.find((s, i) => i > currentIdx && !s.panorama_url);
 
-  const handleCapture = async (uri: string) => {
+  const handleComplete = async (payload: GuidedCapturePayload) => {
     if (!sceneId) return;
-    await setSceneMedia(sceneId, uri, 'camera');
+    await commitSceneCapture(sceneId, {
+      primaryUri: payload.primaryUri,
+      sources: payload.sources,
+      sectorMask: payload.sectorMask,
+      mediaType: payload.mediaType,
+    });
 
     if (nextEmpty) {
       router.replace(
@@ -33,7 +38,7 @@ export default function CameraScreen() {
     <GuidedCamera
       sceneName={decodeURIComponent(sceneName ?? '')}
       nextSceneName={nextEmpty?.name}
-      onCapture={handleCapture}
+      onComplete={handleComplete}
       onClose={() => router.back()}
     />
   );
