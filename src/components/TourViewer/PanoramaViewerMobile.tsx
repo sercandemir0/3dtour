@@ -2,6 +2,7 @@ import { useRef, useMemo } from 'react';
 import { View, StyleSheet } from 'react-native';
 import { WebView } from 'react-native-webview';
 import type { Scene } from '@/src/types/tour';
+import { getGuidedPanoramaUris } from '@/src/utils/sceneProjection';
 
 interface Props {
   scene: Scene;
@@ -11,6 +12,7 @@ interface Props {
 
 export function PanoramaViewerMobile({ scene, scenes, onHotspotClick }: Props) {
   const webViewRef = useRef<WebView>(null);
+  const guidedUris = useMemo(() => getGuidedPanoramaUris(scene), [scene]);
 
   const hotspots = (scene.hotspots ?? [])
     .filter((h) => h.target_scene_id && h.yaw != null && h.pitch != null)
@@ -23,7 +25,10 @@ export function PanoramaViewerMobile({ scene, scenes, onHotspotClick }: Props) {
       sceneId: h.target_scene_id!,
     }));
 
-  const html = useMemo(() => generatePannellumHTML(scene.panorama_url!, hotspots), [scene.id]);
+  const html = useMemo(
+    () => generatePannellumHTML(scene.panorama_url!, hotspots, guidedUris),
+    [scene.id, scene.panorama_url, guidedUris, JSON.stringify(hotspots)],
+  );
 
   const handleMessage = (event: any) => {
     try {
@@ -55,9 +60,11 @@ export function PanoramaViewerMobile({ scene, scenes, onHotspotClick }: Props) {
 
 function generatePannellumHTML(
   imageUrl: string,
-  hotspots: { id: string; pitch: number; yaw: number; text: string; sceneId: string }[]
+  hotspots: { id: string; pitch: number; yaw: number; text: string; sceneId: string }[],
+  guidedUris: string[] | null,
 ) {
   const hotspotsJSON = JSON.stringify(hotspots);
+  const guidedUrisJSON = JSON.stringify(guidedUris ?? []);
 
   return `<!DOCTYPE html>
 <html>
@@ -90,6 +97,7 @@ function generatePannellumHTML(
   <div id="panorama"></div>
   <script>
     var hotspots = ${hotspotsJSON};
+    var guidedUris = ${guidedUrisJSON};
 
     var hotspotConfig = hotspots.map(function(h) {
       return {
@@ -109,18 +117,66 @@ function generatePannellumHTML(
       };
     });
 
-    pannellum.viewer('panorama', {
-      type: 'equirectangular',
-      panorama: '${imageUrl}',
-      autoLoad: true,
-      showControls: false,
-      mouseZoom: true,
-      hfov: 100,
-      minHfov: 30,
-      maxHfov: 120,
-      friction: 0.15,
-      hotSpots: hotspotConfig
-    });
+    function loadImage(src) {
+      return new Promise(function(resolve, reject) {
+        var img = new Image();
+        img.onload = function() { resolve(img); };
+        img.onerror = reject;
+        img.src = src;
+      });
+    }
+
+    function buildGuidedPanorama(uris) {
+      var canvas = document.createElement('canvas');
+      canvas.width = 4096;
+      canvas.height = 2048;
+      var ctx = canvas.getContext('2d');
+
+      if (!ctx) {
+        return Promise.reject(new Error('Canvas context unavailable'));
+      }
+
+      ctx.fillStyle = '#111';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+      return Promise.all(uris.map(loadImage)).then(function(images) {
+        var segmentWidth = canvas.width / images.length;
+
+        images.forEach(function(image, index) {
+          var scale = Math.max(segmentWidth / image.width, canvas.height / image.height);
+          var drawWidth = image.width * scale;
+          var drawHeight = image.height * scale;
+          var dx = index * segmentWidth + (segmentWidth - drawWidth) / 2;
+          var dy = (canvas.height - drawHeight) / 2;
+          ctx.drawImage(image, dx, dy, drawWidth, drawHeight);
+        });
+
+        return canvas.toDataURL('image/jpeg', 0.92);
+      });
+    }
+
+    function initPanorama(panoramaUrl) {
+      pannellum.viewer('panorama', {
+        type: 'equirectangular',
+        panorama: panoramaUrl,
+        autoLoad: true,
+        showControls: false,
+        mouseZoom: true,
+        hfov: 100,
+        minHfov: 30,
+        maxHfov: 120,
+        friction: 0.15,
+        hotSpots: hotspotConfig
+      });
+    }
+
+    if (guidedUris.length) {
+      buildGuidedPanorama(guidedUris)
+        .then(initPanorama)
+        .catch(function() { initPanorama('${imageUrl}'); });
+    } else {
+      initPanorama('${imageUrl}');
+    }
   </script>
 </body>
 </html>`;

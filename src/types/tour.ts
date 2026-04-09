@@ -5,6 +5,8 @@ export type SceneMediaType = 'photo' | 'video_frame' | 'camera' | null;
 export type HotspotIconType = 'navigate' | 'info' | 'link';
 export type JobType = 'panorama_stitch' | 'gaussian_splat' | 'video_extract';
 export type JobStatus = 'pending' | 'processing' | 'completed' | 'failed';
+export type SceneProjectionKind = 'single_image' | 'guided_strip_360';
+export type SceneProjectionProvider = 'local' | 'remote';
 
 export interface Vector3 {
   x: number;
@@ -26,6 +28,15 @@ export interface SceneCaptureSource {
   yawDeg?: number;
   atMs?: number;
   sectorIndex?: number;
+}
+
+export interface SceneProjection {
+  version: 1;
+  kind: SceneProjectionKind;
+  source_uris: string[];
+  provider: SceneProjectionProvider;
+  coverage_sector_count?: number;
+  remote_job_id?: string | null;
 }
 
 export interface Tour {
@@ -64,6 +75,10 @@ export interface Scene {
   capture_sources?: SceneCaptureSource[];
   /** Length 6: horizontal sector i covered if true (see sectorCoverage util). */
   coverage_sector_mask?: boolean[];
+  /** Persisted projection contract for stitched or raw scene playback. */
+  projection?: SceneProjection | null;
+  /** Optional remote/local processing state for this scene projection. */
+  processing_job?: ProcessingJob | null;
 }
 
 export interface Hotspot {

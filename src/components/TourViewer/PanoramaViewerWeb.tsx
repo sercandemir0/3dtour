@@ -1,13 +1,52 @@
-import { useRef, useState, useCallback, useEffect } from 'react';
-import { View, StyleSheet } from 'react-native';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { View, StyleSheet, ActivityIndicator, Text } from 'react-native';
 import { Canvas, useFrame, useThree, useLoader } from '@react-three/fiber';
 import * as THREE from 'three';
 import type { Scene } from '@/src/types/tour';
+import { getGuidedPanoramaUris } from '@/src/utils/sceneProjection';
 
 interface Props {
   scene: Scene;
   scenes: Scene[];
   onHotspotClick?: (targetSceneId: string) => void;
+}
+
+async function loadImage(src: string): Promise<HTMLImageElement> {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => resolve(img);
+    img.onerror = reject;
+    img.src = src;
+  });
+}
+
+async function buildGuidedPanoramaTexture(sourceUris: string[]): Promise<string> {
+  const canvas = document.createElement('canvas');
+  canvas.width = 4096;
+  canvas.height = 2048;
+  const ctx = canvas.getContext('2d');
+
+  if (!ctx) {
+    throw new Error('Canvas context unavailable');
+  }
+
+  ctx.fillStyle = '#111';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+  const segmentWidth = canvas.width / sourceUris.length;
+  const images = await Promise.all(sourceUris.map((uri) => loadImage(uri)));
+
+  images.forEach((image, index) => {
+    const scale = Math.max(segmentWidth / image.width, canvas.height / image.height);
+    const drawWidth = image.width * scale;
+    const drawHeight = image.height * scale;
+    const dx = index * segmentWidth + (segmentWidth - drawWidth) / 2;
+    const dy = (canvas.height - drawHeight) / 2;
+
+    ctx.drawImage(image, dx, dy, drawWidth, drawHeight);
+  });
+
+  return canvas.toDataURL('image/jpeg', 0.92);
 }
 
 function PanoramaSphere({ imageUrl }: { imageUrl: string }) {
@@ -138,15 +177,60 @@ function HotspotMarkers({
 }
 
 export function PanoramaViewerWeb({ scene, scenes, onHotspotClick }: Props) {
+  const guidedUris = useMemo(() => getGuidedPanoramaUris(scene), [scene]);
+  const fallbackPanoramaUrl = scene.panorama_url ?? '';
+  const [panoramaUrl, setPanoramaUrl] = useState(fallbackPanoramaUrl);
+  const [loadingProjection, setLoadingProjection] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    if (!guidedUris?.length) {
+      setPanoramaUrl(fallbackPanoramaUrl);
+      setLoadingProjection(false);
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    setLoadingProjection(true);
+    void buildGuidedPanoramaTexture(guidedUris)
+      .then((dataUrl) => {
+        if (!cancelled) {
+          setPanoramaUrl(dataUrl);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setPanoramaUrl(fallbackPanoramaUrl);
+        }
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setLoadingProjection(false);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [fallbackPanoramaUrl, guidedUris]);
+
   if (!scene.panorama_url) return null;
 
   return (
     <View style={styles.container}>
+      {loadingProjection && (
+        <View style={styles.loadingOverlay}>
+          <ActivityIndicator size="large" color="#8b5cf6" />
+          <Text style={styles.loadingText}>360 goruntu hazirlaniyor...</Text>
+        </View>
+      )}
       <Canvas
         camera={{ fov: 75, position: [0, 0, 0.1] }}
         style={{ width: '100%', height: '100%' }}
       >
-        <PanoramaSphere imageUrl={scene.panorama_url} />
+        <PanoramaSphere imageUrl={panoramaUrl} />
         <CameraControls />
         <HotspotMarkers
           hotspots={scene.hotspots}
@@ -161,5 +245,19 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: '#000',
+  },
+  loadingOverlay: {
+    position: 'absolute',
+    inset: 0,
+    zIndex: 2,
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 12,
+    backgroundColor: 'rgba(0,0,0,0.35)',
+  },
+  loadingText: {
+    color: '#d1d5db',
+    fontSize: 14,
+    fontWeight: '600',
   },
 });

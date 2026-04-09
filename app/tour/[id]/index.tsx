@@ -35,6 +35,8 @@ function SceneCard({
 }) {
   const hasMedia = !!scene.panorama_url;
   const cov = getCoverageSummary(scene);
+  const processingJob = scene.processing_job;
+  const processingStatus = processingJob?.status ?? null;
 
   return (
     <TouchableOpacity
@@ -72,6 +74,16 @@ function SceneCard({
           </Text>
         </View>
       )}
+      {processingStatus === 'pending' || processingStatus === 'processing' ? (
+        <View style={styles.processingBadge}>
+          <Text style={styles.processingBadgeText}>stitch queue</Text>
+        </View>
+      ) : null}
+      {processingStatus === 'failed' ? (
+        <View style={[styles.processingBadge, styles.processingBadgeFailed]}>
+          <Text style={styles.processingBadgeText}>stitch fail</Text>
+        </View>
+      ) : null}
       {!hasMedia && (
         <View style={styles.captureOverlay}>
           <Text style={styles.captureOverlayText}>Çek</Text>
@@ -92,7 +104,7 @@ export default function TourDetailScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const {
     currentTour, loading, fetchTour,
-    addScene, setSceneMedia, deleteTour,
+    addScene, setSceneMedia, deleteTour, reconcileTourProcessing,
     getCompletedCount,
   } = useTourStore();
 
@@ -106,6 +118,32 @@ export default function TourDetailScreen() {
   useEffect(() => {
     if (id) fetchTour(id);
   }, [id]);
+
+  useEffect(() => {
+    if (!currentTour?.id) {
+      return;
+    }
+
+    const hasPendingRemoteJobs = (currentTour.scenes ?? []).some((scene) => {
+      const job = scene.processing_job;
+      return (
+        scene.projection?.provider === 'remote' &&
+        job != null &&
+        (job.status === 'pending' || job.status === 'processing')
+      );
+    });
+
+    if (!hasPendingRemoteJobs) {
+      return;
+    }
+
+    void reconcileTourProcessing(currentTour.id);
+    const timer = setInterval(() => {
+      void reconcileTourProcessing(currentTour.id);
+    }, 5000);
+
+    return () => clearInterval(timer);
+  }, [currentTour, reconcileTourProcessing]);
 
   const openGuidedCamera = (scene: Scene) => {
     router.push(
@@ -515,6 +553,24 @@ const styles = StyleSheet.create({
   coverageBadge: {
     paddingHorizontal: 10,
     paddingBottom: 8,
+  },
+  processingBadge: {
+    marginHorizontal: 10,
+    marginBottom: 8,
+    alignSelf: 'flex-start',
+    backgroundColor: '#2563eb33',
+    borderRadius: 999,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+  },
+  processingBadgeFailed: {
+    backgroundColor: '#ef444433',
+  },
+  processingBadgeText: {
+    color: '#bfdbfe',
+    fontSize: 10,
+    fontWeight: '700',
+    textTransform: 'uppercase',
   },
   coverageBadgeText: { fontSize: 11, fontWeight: '600' },
   coverageBadgeWarn: { color: '#fbbf24' },

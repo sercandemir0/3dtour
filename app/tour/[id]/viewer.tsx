@@ -14,13 +14,39 @@ import type { Scene } from '@/src/types/tour';
 
 export default function ViewerScreen() {
   const { id, startScene } = useLocalSearchParams<{ id: string; startScene?: string }>();
-  const { currentTour, loading, fetchTour } = useTourStore();
+  const { currentTour, loading, fetchTour, reconcileTourProcessing } = useTourStore();
   const [activeSceneIndex, setActiveSceneIndex] = useState(0);
   const scenes = (currentTour?.scenes ?? []).filter((s) => s.panorama_url);
 
   useEffect(() => {
     if (id) fetchTour(id);
   }, [id]);
+
+  useEffect(() => {
+    if (!currentTour?.id) {
+      return;
+    }
+
+    const hasPendingRemoteJobs = (currentTour.scenes ?? []).some((scene) => {
+      const job = scene.processing_job;
+      return (
+        scene.projection?.provider === 'remote' &&
+        job != null &&
+        (job.status === 'pending' || job.status === 'processing')
+      );
+    });
+
+    if (!hasPendingRemoteJobs) {
+      return;
+    }
+
+    void reconcileTourProcessing(currentTour.id);
+    const timer = setInterval(() => {
+      void reconcileTourProcessing(currentTour.id);
+    }, 5000);
+
+    return () => clearInterval(timer);
+  }, [currentTour, reconcileTourProcessing]);
 
   useEffect(() => {
     if (!scenes.length || startScene == null) return;

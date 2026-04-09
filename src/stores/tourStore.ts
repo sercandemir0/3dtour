@@ -7,7 +7,13 @@ import type {
   CaptureMode,
   SceneMediaType,
   SceneCaptureSource,
+  SceneProjection,
+  ProcessingJob,
 } from '@/src/types/tour';
+import {
+  startPanoramaPipeline,
+  pollPanoramaPipeline,
+} from '@/src/services/panoramaPipeline';
 
 const STORAGE_KEY = '@3dtour_tours';
 const COVERAGE_SECTOR_COUNT = 6;
@@ -52,8 +58,10 @@ interface TourState {
       sectorMask: boolean[];
       mediaType: SceneMediaType;
     },
-  ) => Promise<void>;
+  ) => Promise<{ projection: SceneProjection; processingJob: ProcessingJob | null }>;
   reorderScenes: (tourId: string, sceneIds: string[]) => Promise<void>;
+  reconcileSceneProcessing: (sceneId: string) => Promise<void>;
+  reconcileTourProcessing: (tourId: string) => Promise<void>;
 
   addHotspot: (hotspot: Omit<Hotspot, 'id' | 'created_at'>) => Promise<Hotspot>;
   deleteHotspot: (id: string) => Promise<void>;
@@ -69,6 +77,19 @@ async function saveTours(tours: Tour[]) {
 async function loadTours(): Promise<Tour[]> {
   const data = await AsyncStorage.getItem(STORAGE_KEY);
   return data ? JSON.parse(data) : [];
+}
+
+function updateSceneInTours(
+  tours: Tour[],
+  sceneId: string,
+  updates: Partial<Scene>,
+): Tour[] {
+  return tours.map((tour) => ({
+    ...tour,
+    scenes: tour.scenes?.map((scene) => (
+      scene.id === sceneId ? { ...scene, ...updates } : scene
+    )),
+  }));
 }
 
 export const useTourStore = create<TourState>((set, get) => ({
@@ -310,12 +331,20 @@ export const useTourStore = create<TourState>((set, get) => ({
   },
 
   setSceneMedia: async (sceneId, uri, mediaType) => {
+    const pipeline = await startPanoramaPipeline({
+      sceneId,
+      primaryUri: uri,
+      mediaType,
+    });
+
     const updates: Partial<Scene> = {
       panorama_url: uri,
       thumbnail_url: uri,
       media_type: mediaType,
       capture_sources: undefined,
       coverage_sector_mask: undefined,
+      projection: pipeline.projection,
+      processing_job: pipeline.processingJob,
     };
     await get().updateScene(sceneId, updates);
   },
@@ -325,14 +354,28 @@ export const useTourStore = create<TourState>((set, get) => ({
       { length: COVERAGE_SECTOR_COUNT },
       (_, i) => !!sectorMask[i],
     );
+    const pipeline = await startPanoramaPipeline({
+      sceneId,
+      primaryUri,
+      mediaType,
+      sources,
+      sectorMask: paddedMask,
+    });
+
     const updates: Partial<Scene> = {
       panorama_url: primaryUri,
       thumbnail_url: primaryUri,
       media_type: mediaType,
       capture_sources: sources,
       coverage_sector_mask: paddedMask,
+      projection: pipeline.projection,
+      processing_job: pipeline.processingJob,
     };
     await get().updateScene(sceneId, updates);
+    return {
+      projection: pipeline.projection,
+      processingJob: pipeline.processingJob,
+    };
   },
 
   reorderScenes: async (tourId, sceneIds) => {
@@ -354,6 +397,61 @@ export const useTourStore = create<TourState>((set, get) => ({
         ? tours.find((t) => t.id === tourId) ?? null
         : currentTour,
     });
+  },
+
+  reconcileSceneProcessing: async (sceneId) => {
+    const scene =
+      get().tours.flatMap((tour) => tour.scenes ?? []).find((item) => item.id === sceneId) ?? null;
+
+    if (!scene) {
+      return;
+    }
+
+    const result = await pollPanoramaPipeline(scene);
+    if (!result) {
+      return;
+    }
+
+    const updates: Partial<Scene> = {};
+
+    if (result.panoramaUrl !== undefined) {
+      updates.panorama_url = result.panoramaUrl;
+    }
+    if (result.thumbnailUrl !== undefined) {
+      updates.thumbnail_url = result.thumbnailUrl;
+    }
+    if (result.projection !== undefined) {
+      updates.projection = result.projection;
+    }
+    if (result.processingJob !== undefined) {
+      updates.processing_job = result.processingJob;
+    }
+
+    const tours = updateSceneInTours(get().tours, sceneId, updates);
+    await saveTours(tours);
+    const currentTour = get().currentTour;
+    set({
+      tours,
+      currentTour: currentTour?.scenes?.some((item) => item.id === sceneId)
+        ? tours.find((tour) => tour.id === currentTour.id) ?? currentTour
+        : currentTour,
+    });
+  },
+
+  reconcileTourProcessing: async (tourId) => {
+    const tour = get().tours.find((item) => item.id === tourId);
+    const remotePendingScenes = (tour?.scenes ?? []).filter((scene) => {
+      const job = scene.processing_job;
+      return (
+        scene.projection?.provider === 'remote' &&
+        job != null &&
+        (job.status === 'pending' || job.status === 'processing')
+      );
+    });
+
+    for (const scene of remotePendingScenes) {
+      await get().reconcileSceneProcessing(scene.id);
+    }
   },
 
   getIncompleteScenes: (tourId) => {

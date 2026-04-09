@@ -40,7 +40,7 @@ export default function CameraScreen() {
 
   const handleComplete = async (payload: GuidedCapturePayload) => {
     if (!sceneId) return;
-    await commitSceneCapture(sceneId, {
+    const pipeline = await commitSceneCapture(sceneId, {
       primaryUri: payload.primaryUri,
       sources: payload.sources,
       sectorMask: payload.sectorMask,
@@ -56,6 +56,8 @@ export default function CameraScreen() {
             media_type: payload.mediaType,
             capture_sources: payload.sources,
             coverage_sector_mask: payload.sectorMask,
+            projection: pipeline.projection,
+            processing_job: pipeline.processingJob,
           }
         : scene,
     );
