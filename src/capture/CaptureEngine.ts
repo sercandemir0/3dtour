@@ -7,7 +7,14 @@
  * drives it via dispatched actions and reads its state for rendering.
  */
 import type { CaptureTarget, GridConfig } from './CaptureGrid';
-import { buildCaptureGrid, isTargetAligned, findNearestTarget, getCompletionStats } from './CaptureGrid';
+import {
+  buildCaptureGrid,
+  isTargetAligned,
+  findNearestTarget,
+  getCompletionStats,
+  shortestYawDeltaDeg,
+  sphericalDistance,
+} from './CaptureGrid';
 import type { Orientation } from './OrientationTracker';
 import type { QualityReport } from './QualityGate';
 
@@ -63,6 +70,10 @@ export interface DirectionHint {
   yawDir: 'left' | 'right' | 'none';
   pitchDir: 'up' | 'down' | 'none';
   label: string;
+  /** Degrees to turn: positive = target is to the right (turn right). */
+  yawDeltaDeg: number;
+  /** Degrees to tilt: positive = look up toward target. */
+  pitchDeltaDeg: number;
 }
 
 export interface EngineState {
@@ -106,7 +117,7 @@ export function createInitialState(gridConfig?: Partial<GridConfig>): EngineStat
     currentTarget: null,
     aligned: false,
     stable: false,
-    directionHint: { yawDir: 'none', pitchDir: 'none', label: '' },
+    directionHint: { yawDir: 'none', pitchDir: 'none', label: '', yawDeltaDeg: 0, pitchDeltaDeg: 0 },
     orientation: { yawDeg: 0, pitchDeg: 0, rollDeg: 0, angularVelocityDegPerSec: 0, timestamp: 0 },
     sessionBrightness: null,
     manualShutter: false,
@@ -170,7 +181,15 @@ export function updateOrientation(state: EngineState, o: Orientation): EngineSta
 
   const active = currentTarget ?? findNearestTarget(targets, completedIds, o.yawDeg, o.pitchDeg);
   const aligned = active ? isTargetAligned(active, o.yawDeg, o.pitchDeg) : false;
-  const hint = active ? computeDirectionHint(active, o) : { yawDir: 'none' as const, pitchDir: 'none' as const, label: '' };
+  const hint = active
+    ? computeDirectionHint(active, o)
+    : {
+        yawDir: 'none' as const,
+        pitchDir: 'none' as const,
+        label: '',
+        yawDeltaDeg: 0,
+        pitchDeltaDeg: 0,
+      };
 
   let subPhase = state.captureSubPhase;
   if (!aligned) {
@@ -247,30 +266,54 @@ export function toggleManualShutter(state: EngineState): EngineState {
 // -- Helpers -----------------------------------------------------------------
 
 function computeDirectionHint(target: CaptureTarget, o: Orientation): DirectionHint {
-  const dYaw = target.yawDeg - o.yawDeg;
-  const normalised = ((dYaw + 540) % 360) - 180;
+  const yawDeltaDeg = shortestYawDeltaDeg(target.yawDeg, o.yawDeg);
+  const pitchDeltaDeg = target.pitchDeg - o.pitchDeg;
+
+  const aligned = isTargetAligned(target, o.yawDeg, o.pitchDeg);
 
   let yawDir: 'left' | 'right' | 'none' = 'none';
-  if (Math.abs(normalised) > 5) {
-    yawDir = normalised > 0 ? 'right' : 'left';
+  if (Math.abs(yawDeltaDeg) > 4) {
+    yawDir = yawDeltaDeg > 0 ? 'right' : 'left';
   }
 
-  const dPitch = target.pitchDeg - o.pitchDeg;
   let pitchDir: 'up' | 'down' | 'none' = 'none';
-  if (Math.abs(dPitch) > 5) {
-    pitchDir = dPitch > 0 ? 'up' : 'down';
+  if (Math.abs(pitchDeltaDeg) > 4) {
+    pitchDir = pitchDeltaDeg > 0 ? 'up' : 'down';
   }
 
-  let label = '';
-  if (yawDir === 'left') label = 'Sola dönün';
-  else if (yawDir === 'right') label = 'Sağa dönün';
+  if (aligned) {
+    return {
+      yawDir: 'none',
+      pitchDir: 'none',
+      label: '',
+      yawDeltaDeg,
+      pitchDeltaDeg,
+    };
+  }
 
-  if (pitchDir === 'up') label += label ? ' ve yukarı bakın' : 'Yukarı bakın';
-  else if (pitchDir === 'down') label += label ? ' ve aşağı bakın' : 'Aşağı bakın';
+  const ay = Math.abs(yawDeltaDeg);
+  const ap = Math.abs(pitchDeltaDeg);
+  const sphereErr =
+    target.ring === 'zenith' || target.ring === 'nadir'
+      ? sphericalDistance(target.yawDeg, target.pitchDeg, o.yawDeg, o.pitchDeg)
+      : null;
 
-  if (!label) label = 'Sabit tutun…';
+  const parts: string[] = [];
+  if (yawDir === 'left') parts.push(`Sola ~${Math.round(ay)}°`);
+  else if (yawDir === 'right') parts.push(`Sağa ~${Math.round(ay)}°`);
 
-  return { yawDir, pitchDir, label };
+  if (pitchDir === 'up') parts.push(`Yukarı ~${Math.round(ap)}°`);
+  else if (pitchDir === 'down') parts.push(`Aşağı ~${Math.round(ap)}°`);
+
+  let label = parts.join(' · ');
+  if (!label && sphereErr != null) {
+    label = `Hedefe ~${Math.round(sphereErr)}°`;
+  }
+  if (!label) {
+    label = 'Konumu ince ayarlayın';
+  }
+
+  return { yawDir, pitchDir, label, yawDeltaDeg, pitchDeltaDeg };
 }
 
 export function buildCaptureSession(

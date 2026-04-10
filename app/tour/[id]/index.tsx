@@ -17,6 +17,7 @@ import { TourProgress } from '@/src/components/TourProgress';
 import { VideoFramePicker } from '@/src/components/VideoFramePicker';
 import type { Scene } from '@/src/types/tour';
 import {
+  getCaptureSessionBadgeText,
   getSceneCaptureStatus,
   getSceneStatus,
   getSceneThumbnailUri,
@@ -46,6 +47,7 @@ function SceneCard({
   const completedCaptureCount = scene.capture_set
     ? Object.values(scene.capture_set.shots).filter(Boolean).length
     : 0;
+  const sessionBadge = getCaptureSessionBadgeText(scene);
 
   return (
     <TouchableOpacity
@@ -69,7 +71,7 @@ function SceneCard({
         <View style={[styles.statusDot, hasMedia ? styles.statusDone : styles.statusEmpty]} />
         <Text style={styles.sceneName} numberOfLines={1}>{scene.name}</Text>
       </View>
-      {scene.capture_set && (
+      {(sessionBadge || scene.capture_set) ? (
         <View style={styles.coverageBadge}>
           <Text
             style={[
@@ -77,12 +79,14 @@ function SceneCard({
               captureStatus !== 'complete' ? styles.coverageBadgeWarn : styles.coverageBadgeOk,
             ]}
           >
-            {captureStatus === 'complete'
-              ? '6/6 yon'
-              : `${completedCaptureCount}/6 yon`}
+            {sessionBadge
+              ? sessionBadge + (captureStatus === 'complete' ? ' ✓' : '')
+              : captureStatus === 'complete'
+                ? '6/6 yön'
+                : `${completedCaptureCount}/6 yön`}
           </Text>
         </View>
-      )}
+      ) : null}
       {status === 'ready_for_stitch' ? (
         <View style={styles.processingBadge}>
           <Text style={styles.processingBadgeText}>ready for stitch</Text>
@@ -221,51 +225,18 @@ export default function TourDetailScreen() {
     }
   };
 
-  const openAdvancedMenu = () => {
-    Alert.alert('Gelişmiş', 'Toplu galeri ataması boş odalara sırayla fotoğraf yerleştirir.', [
-      { text: 'İptal', style: 'cancel' },
-      {
-        text: 'Toplu fotoğraf ata',
-        onPress: () => handleBulkGallery(),
-      },
-    ]);
-  };
-
-  const handleBulkGallery = async () => {
+  const openLegacyGallery = () => {
     if (!currentTour) return;
-    const emptyScenes = (currentTour.scenes ?? []).filter((scene) => getSceneViewerMode(scene) === 'none');
-    if (emptyScenes.length === 0) {
-      Alert.alert('Bilgi', 'Tüm odalara zaten medya eklenmiş.');
+    const list = currentTour.scenes ?? [];
+    if (list.length === 0) {
+      Alert.alert('Bilgi', 'Önce bir görünüm ekleyin.');
       return;
     }
-
-    const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
-    if (!perm.granted) {
-      Alert.alert('İzin gerekli', 'Galeri erişim izni verin.');
+    if (list.length === 1) {
+      setGalleryModal({ step: 'kind', scene: list[0] });
       return;
     }
-
-    setBusy(true);
-    try {
-      const result = await ImagePicker.launchImageLibraryAsync({
-        mediaTypes: ['images'],
-        quality: 1,
-        allowsMultipleSelection: true,
-        selectionLimit: emptyScenes.length,
-        orderedSelection: true,
-      });
-
-      if (result.canceled || !result.assets.length) return;
-
-      for (let i = 0; i < Math.min(result.assets.length, emptyScenes.length); i++) {
-        await setSceneMedia(emptyScenes[i].id, result.assets[i].uri, 'photo');
-      }
-      await fetchTour(currentTour.id);
-    } catch (e: any) {
-      Alert.alert('Hata', e.message ?? 'Toplu yükleme başarısız');
-    } finally {
-      setBusy(false);
-    }
+    setGalleryModal({ step: 'rooms' });
   };
 
   const handleAddRoom = async () => {
@@ -278,8 +249,8 @@ export default function TourDetailScreen() {
 
     if (typeof Alert.prompt === 'function') {
       Alert.prompt(
-        'Yeni Oda',
-        'Oda adini girin',
+        'Yeni görünüm',
+        'Görünüm adını girin',
         async (name) => {
           if (!name?.trim()) return;
           await addScene(currentTour.id, name.trim(), sceneType);
@@ -287,7 +258,7 @@ export default function TourDetailScreen() {
         },
       );
     } else {
-      const defaultName = `Oda ${(currentTour.scenes?.length ?? 0) + 1}`;
+      const defaultName = `Görünüm ${(currentTour.scenes?.length ?? 0) + 1}`;
       await addScene(currentTour.id, defaultName, sceneType);
       await fetchTour(currentTour.id);
     }
@@ -365,7 +336,7 @@ export default function TourDetailScreen() {
           }}
           coverageHint={
             coverageIncompleteCount > 0
-              ? `${coverageIncompleteCount} odada 360° kapsam eksik — kamera ile tamamlayın`
+              ? `${coverageIncompleteCount} görünümde 360° kapsam eksik — kamera ile tamamlayın`
               : null
           }
         />
@@ -389,13 +360,13 @@ export default function TourDetailScreen() {
         </View>
 
         <View style={styles.scenesHeader}>
-          <Text style={styles.sectionTitle}>Odalar ({scenes.length})</Text>
+          <Text style={styles.sectionTitle}>Görünümler ({scenes.length})</Text>
         </View>
 
         {scenes.length === 0 ? (
           <View style={styles.emptyScenes}>
             <Text style={styles.emptyScenesText}>
-              Henüz oda tanımlanmamış. "+" ile oda ekleyin veya turu yeniden oluşturun.
+              Henüz görünüm yok. Aşağıdan yeni görünüm ekleyebilirsiniz.
             </Text>
           </View>
         ) : (
@@ -417,7 +388,7 @@ export default function TourDetailScreen() {
         <View style={styles.bottomActions}>
           <TouchableOpacity
             style={styles.galleryImportLink}
-            onPress={() => setGalleryModal({ step: 'rooms' })}
+            onPress={openLegacyGallery}
             activeOpacity={0.7}
           >
             <Text style={styles.galleryImportLinkText}>Galeriden legacy panorama içe aktar</Text>
@@ -428,16 +399,7 @@ export default function TourDetailScreen() {
             onPress={handleAddRoom}
             activeOpacity={0.8}
           >
-            <Text style={styles.addRoomBtnText}>+ Yeni oda ekle</Text>
-          </TouchableOpacity>
-
-          <TouchableOpacity
-            style={styles.advancedLink}
-            onPress={openAdvancedMenu}
-            disabled={busy}
-            activeOpacity={0.7}
-          >
-            <Text style={styles.advancedLinkText}>Gelişmiş: toplu galeri ataması</Text>
+            <Text style={styles.addRoomBtnText}>+ Yeni görünüm ekle</Text>
           </TouchableOpacity>
         </View>
       </ScrollView>
@@ -473,9 +435,9 @@ export default function TourDetailScreen() {
               <View style={styles.modalHandle} />
               {galleryModal?.step === 'rooms' && (
                 <>
-                  <Text style={styles.modalTitle}>Hangi odaya?</Text>
+                  <Text style={styles.modalTitle}>Hangi görünüme?</Text>
                   <Text style={styles.modalSubtitle}>
-                    Rehberli 6 yon cekim icin oda kartina dokunun. Bu alan tek dosyalik legacy import icindir.
+                    Rehberli çekim için karttan başlayın. Bu akış tek dosyalık legacy panorama içe aktarımı içindir.
                   </Text>
                   <ScrollView style={styles.roomPickList} nestedScrollEnabled>
                     {scenes.map((s) => (
@@ -519,7 +481,7 @@ export default function TourDetailScreen() {
                     style={styles.modalBack}
                     onPress={() => setGalleryModal({ step: 'rooms' })}
                   >
-                    <Text style={styles.modalBackText}>← Oda seçimine dön</Text>
+                    <Text style={styles.modalBackText}>← Görünüm listesine dön</Text>
                   </TouchableOpacity>
                 </>
               )}
@@ -615,8 +577,6 @@ const styles = StyleSheet.create({
   bottomActions: { marginTop: 20, gap: 10 },
   galleryImportLink: { paddingVertical: 12, alignItems: 'center' },
   galleryImportLinkText: { color: '#8b5cf6', fontSize: 15, fontWeight: '600' },
-  advancedLink: { paddingVertical: 8, alignItems: 'center' },
-  advancedLinkText: { color: '#6b7280', fontSize: 13 },
   addRoomBtn: {
     backgroundColor: '#1e1e3a', borderRadius: 12, padding: 14, alignItems: 'center',
     borderWidth: 1, borderColor: '#2d2d5e',

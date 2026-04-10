@@ -16,7 +16,7 @@ export function TourProgress({ completed, total, onPressIncomplete, coverageHint
     <View style={styles.wrapper}>
       <View style={styles.labelRow}>
         <Text style={styles.label}>
-          {allDone ? 'Tüm odalar tamamlandı' : `${completed} / ${total} oda çekildi`}
+          {allDone ? 'Tüm görünümler tamamlandı' : `${completed} / ${total} görünüm çekildi`}
         </Text>
         {!allDone && total > 0 && (
           <TouchableOpacity onPress={onPressIncomplete} hitSlop={8}>

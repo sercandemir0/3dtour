@@ -52,8 +52,9 @@ export default function CameraScreen() {
         : scene,
     );
     const nextPending = findNextPendingScene(updatedScenes, currentIdx);
+    const multiScene = updatedScenes.length > 1;
 
-    if (nextPending) {
+    if (nextPending && multiScene) {
       router.replace(
         `/tour/${id}/camera?sceneId=${nextPending.id}&sceneName=${encodeURIComponent(nextPending.name)}`
       );
@@ -63,12 +64,20 @@ export default function CameraScreen() {
     }
   };
 
+  const singleSceneMvp = scenes.length <= 1;
+
   return (
     <GuidedCamera
       key={`${id ?? 'tour'}:${sceneId ?? 'scene'}`}
       sceneName={decodeURIComponent(sceneName ?? '')}
-      nextSceneName={findNextPendingScene(scenes, currentIdx)?.name ?? undefined}
-      roomProgressLabel={currentIdx >= 0 ? `Oda ${currentIdx + 1}/${scenes.length}` : undefined}
+      nextSceneName={
+        singleSceneMvp ? undefined : findNextPendingScene(scenes, currentIdx)?.name
+      }
+      roomProgressLabel={
+        singleSceneMvp || currentIdx < 0
+          ? undefined
+          : `Görünüm ${currentIdx + 1}/${scenes.length}`
+      }
       onComplete={handleComplete}
       onClose={() => router.back()}
     />

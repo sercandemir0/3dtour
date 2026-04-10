@@ -1,13 +1,11 @@
 /**
- * TargetOverlay — AR-style target reticle rendered on top of the camera preview.
+ * TargetOverlay — AR-style target reticle on the camera preview.
  *
- * Shows a crosshair at screen centre and a floating target dot that moves
- * according to the angular difference between the current orientation and
- * the active capture target. Colour transitions grey → yellow → green as
- * alignment improves. Direction arrows guide the user.
+ * Edge arrows, degree readout, and alignment progress (grey → yellow → green).
  */
 import { View, Text, StyleSheet, Dimensions } from 'react-native';
 import type { CaptureTarget } from './CaptureGrid';
+import { angleDiff, isTargetAligned, sphericalDistance } from './CaptureGrid';
 import type { DirectionHint } from './CaptureEngine';
 
 interface Props {
@@ -27,6 +25,19 @@ const MOVE_SCALE = 3.5;
 
 function clamp(v: number, min: number, max: number) {
   return Math.max(min, Math.min(max, v));
+}
+
+function computeAlignPct(target: CaptureTarget, yaw: number, pitch: number): number {
+  if (isTargetAligned(target, yaw, pitch)) return 100;
+  if (target.ring === 'zenith' || target.ring === 'nadir') {
+    const d = sphericalDistance(target.yawDeg, target.pitchDeg, yaw, pitch);
+    return Math.max(0, Math.min(100, (1 - d / target.toleranceDeg) * 100));
+  }
+  const yawErr = angleDiff(target.yawDeg, yaw);
+  const pitchErr = Math.abs(target.pitchDeg - pitch);
+  const yawP = 1 - Math.min(1, yawErr / target.toleranceDeg);
+  const pitchP = 1 - Math.min(1, pitchErr / target.pitchToleranceDeg);
+  return Math.max(0, Math.min(100, ((yawP + pitchP) / 2) * 100));
 }
 
 export function TargetOverlay({
@@ -49,29 +60,59 @@ export function TargetOverlay({
   const cx = SW / 2 + clamp(dYaw * MOVE_SCALE, -SW / 2 + 30, SW / 2 - 30);
   const cy = SH / 2 - clamp(dPitch * MOVE_SCALE, -SH / 2 + 60, SH / 2 - 60);
 
+  const alignPct = Math.round(computeAlignPct(target, currentYaw, currentPitch));
+
   const colour = aligned
     ? stable
       ? '#34d399'
       : '#facc15'
     : '#6b7280';
 
-  const ringLabel = target.ring === 'horizon'
-    ? 'Ufuk'
-    : target.ring === 'upper'
-      ? 'Üst'
-      : target.ring === 'lower'
-        ? 'Alt'
-        : target.ring === 'zenith'
-          ? 'Tavan'
-          : 'Zemin';
+  const ringLabel =
+    target.ring === 'horizon'
+      ? 'Ufuk'
+      : target.ring === 'upper'
+        ? 'Üst'
+        : target.ring === 'lower'
+          ? 'Alt'
+          : target.ring === 'zenith'
+            ? 'Tavan'
+            : 'Zemin';
+
+  const showLeft = hint.yawDir === 'left';
+  const showRight = hint.yawDir === 'right';
+  const showUp = hint.pitchDir === 'up';
+  const showDown = hint.pitchDir === 'down';
+
+  const mainLabel = aligned
+    ? stable
+      ? 'Çekim hazır'
+      : 'Hizalandı — sabit tutun (~1 sn)'
+    : hint.label;
+
+  const subDegrees =
+    !aligned && (Math.abs(hint.yawDeltaDeg) > 2 || Math.abs(hint.pitchDeltaDeg) > 2)
+      ? `Δ yaw ${hint.yawDeltaDeg > 0 ? '+' : ''}${Math.round(hint.yawDeltaDeg)}° · Δ pitch ${hint.pitchDeltaDeg > 0 ? '+' : ''}${Math.round(hint.pitchDeltaDeg)}°`
+      : null;
 
   return (
     <View style={styles.container} pointerEvents="none">
-      {/* Centre crosshair */}
       <View style={styles.crossH} />
       <View style={styles.crossV} />
 
-      {/* Target dot */}
+      {showLeft ? (
+        <Text style={[styles.edgeArrow, styles.arrowLeft]}>‹</Text>
+      ) : null}
+      {showRight ? (
+        <Text style={[styles.edgeArrow, styles.arrowRight]}>›</Text>
+      ) : null}
+      {showUp ? (
+        <Text style={[styles.edgeArrow, styles.arrowUp]}>⌃</Text>
+      ) : null}
+      {showDown ? (
+        <Text style={[styles.edgeArrow, styles.arrowDown]}>⌄</Text>
+      ) : null}
+
       <View
         style={[
           styles.target,
@@ -84,12 +125,18 @@ export function TargetOverlay({
         ]}
       />
 
-      {/* Direction hint */}
-      <View style={styles.hintBox}>
-        <Text style={[styles.hintText, { color: colour }]}>{hint.label}</Text>
+      <View style={styles.progressWrap}>
+        <View style={styles.progressTrack}>
+          <View style={[styles.progressFill, { width: `${alignPct}%` as const, backgroundColor: colour }]} />
+        </View>
+        <Text style={[styles.progressLabel, { color: colour }]}>Hizalama {alignPct}%</Text>
       </View>
 
-      {/* Ring + progress label */}
+      <View style={styles.hintBox}>
+        <Text style={[styles.hintText, { color: colour }]}>{mainLabel}</Text>
+        {subDegrees ? <Text style={styles.subDegText}>{subDegrees}</Text> : null}
+      </View>
+
       <View style={styles.ringLabel}>
         <Text style={styles.ringText}>
           {ringLabel} • {capturedCount}/{totalTargets}
@@ -119,6 +166,19 @@ const styles = StyleSheet.create({
     height: 32,
     backgroundColor: 'rgba(255,255,255,0.5)',
   },
+  edgeArrow: {
+    position: 'absolute',
+    color: 'rgba(255,255,255,0.92)',
+    fontSize: 56,
+    fontWeight: '200',
+    textShadowColor: '#000',
+    textShadowOffset: { width: 0, height: 2 },
+    textShadowRadius: 6,
+  },
+  arrowLeft: { left: 8, top: SH / 2 - 36 },
+  arrowRight: { right: 8, top: SH / 2 - 36 },
+  arrowUp: { top: 120, left: 0, right: 0, textAlign: 'center' },
+  arrowDown: { bottom: 200, left: 0, right: 0, textAlign: 'center' },
   target: {
     position: 'absolute',
     width: RETICLE_R * 2,
@@ -126,19 +186,55 @@ const styles = StyleSheet.create({
     borderRadius: RETICLE_R,
     borderWidth: 3,
   },
+  progressWrap: {
+    position: 'absolute',
+    top: SH / 2 + 120,
+    left: 40,
+    right: 40,
+    alignItems: 'center',
+  },
+  progressTrack: {
+    width: '100%',
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: 'rgba(0,0,0,0.45)',
+    overflow: 'hidden',
+  },
+  progressFill: {
+    height: '100%',
+    borderRadius: 3,
+  },
+  progressLabel: {
+    marginTop: 6,
+    fontSize: 13,
+    fontWeight: '700',
+    textShadowColor: '#000',
+    textShadowOffset: { width: 0, height: 1 },
+    textShadowRadius: 3,
+  },
   hintBox: {
     position: 'absolute',
     bottom: 160,
-    left: 0,
-    right: 0,
+    left: 16,
+    right: 16,
     alignItems: 'center',
   },
   hintText: {
     fontSize: 17,
     fontWeight: '700',
+    textAlign: 'center',
     textShadowColor: '#000',
     textShadowOffset: { width: 0, height: 1 },
     textShadowRadius: 4,
+  },
+  subDegText: {
+    marginTop: 6,
+    fontSize: 13,
+    fontWeight: '600',
+    color: 'rgba(255,255,255,0.75)',
+    textShadowColor: '#000',
+    textShadowOffset: { width: 0, height: 1 },
+    textShadowRadius: 3,
   },
   ringLabel: {
     position: 'absolute',

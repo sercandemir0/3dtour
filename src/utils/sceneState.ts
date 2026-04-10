@@ -59,6 +59,13 @@ export function countCaptureShots(captureSet?: SceneCaptureSet | null): number {
   return getOrderedCaptureShots(captureSet).length;
 }
 
+/** Progress label for v2 spherical capture (e.g. "14/22"). */
+export function getCaptureSessionBadgeText(scene: Scene): string | null {
+  const s = scene.capture_session;
+  if (!s?.gridConfig) return null;
+  return `${s.frames.length}/${s.gridConfig.totalTargets}`;
+}
+
 export function deriveCaptureStatus(captureSet?: SceneCaptureSet | null, captureSession?: CaptureSession | null): CaptureStatus {
   if (captureSession) {
     if (captureSession.frames.length === 0) return 'empty';

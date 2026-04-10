@@ -9,6 +9,7 @@ import { useRef, useState, useEffect, useCallback } from 'react';
 import { View, Text, TouchableOpacity, StyleSheet, Platform, Alert } from 'react-native';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import { manipulateAsync, SaveFormat } from 'expo-image-manipulator';
+import * as Haptics from 'expo-haptics';
 
 import { OrientationTracker } from '@/src/capture/OrientationTracker';
 import { getCompletionStats } from '@/src/capture/CaptureGrid';
@@ -33,6 +34,9 @@ import type { QualityReport } from '@/src/capture/QualityGate';
 import { TargetOverlay } from '@/src/capture/TargetOverlay';
 import { CaptureHUD } from '@/src/capture/CaptureHUD';
 import { CaptureReview } from '@/src/capture/CaptureReview';
+
+const STABLE_DPS = 5;
+const STABLE_MS = 350;
 
 // -- Public payload type (consumed by camera.tsx) --
 
@@ -67,7 +71,20 @@ export function GuidedCamera({
   stateRef.current = state;
 
   const capturingRef = useRef(false);
+  const [capturing, setCapturing] = useState(false);
   const autoTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const prevAlignedRef = useRef(false);
+
+  useEffect(() => {
+    if (state.phase !== 'capturing') {
+      prevAlignedRef.current = false;
+      return;
+    }
+    if (state.aligned && !prevAlignedRef.current && Platform.OS !== 'web') {
+      void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {});
+    }
+    prevAlignedRef.current = state.aligned;
+  }, [state.phase, state.aligned]);
 
   // -- Permission → leveling transition (done in effect, not during render) --
   useEffect(() => {
@@ -104,7 +121,7 @@ export function GuidedCamera({
       tracker.addListener((o) => {
         setState((s) => {
           let next = updateOrientation(s, o);
-          const stable = tracker.isStable(3, 500);
+          const stable = tracker.isStable(STABLE_DPS, STABLE_MS);
           next = markStable(next, stable);
           return next;
         });
@@ -122,6 +139,7 @@ export function GuidedCamera({
     const s = stateRef.current;
     if (!cameraRef.current || !s.currentTarget || capturingRef.current) return;
     capturingRef.current = true;
+    setCapturing(true);
 
     try {
       const photo = await cameraRef.current.takePictureAsync({ quality: 0.85 });
@@ -140,7 +158,7 @@ export function GuidedCamera({
         // Quality check failed — proceed without blocking
       }
 
-      const wasStable = trackerRef.current.isStable(3, 500);
+      const wasStable = trackerRef.current.isStable(STABLE_DPS, STABLE_MS);
       if (!wasStable) {
         report.issues.push('Cihaz hareket halindeydi');
         if (report.validation !== 'failed') report.validation = 'warning';
@@ -167,6 +185,7 @@ export function GuidedCamera({
       Alert.alert('Hata', 'Fotoğraf çekilemedi');
     } finally {
       capturingRef.current = false;
+      setCapturing(false);
     }
   }, []);
 
@@ -193,7 +212,7 @@ export function GuidedCamera({
     autoTimerRef.current = setTimeout(() => {
       autoTimerRef.current = null;
       void doCapture();
-    }, 600);
+    }, 400);
 
     return () => {
       if (autoTimerRef.current) {
@@ -378,7 +397,7 @@ export function GuidedCamera({
               requiredDone={stats.allRequiredDone}
               aligned={state.aligned}
               stable={state.stable}
-              capturing={capturingRef.current}
+              capturing={capturing}
               manualShutter={state.manualShutter}
               issueText={state.lastQualityIssueText}
               onShutter={doCapture}

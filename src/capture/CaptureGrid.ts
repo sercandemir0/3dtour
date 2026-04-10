@@ -15,7 +15,10 @@ export interface CaptureTarget {
   pitchDeg: number;
   ring: RingName;
   required: boolean;
+  /** Max great-circle error (deg) for non-horizon rings when using spherical check. */
   toleranceDeg: number;
+  /** Max |pitch error| (deg) for horizon/upper/lower; looser than sphere-only. */
+  pitchToleranceDeg: number;
 }
 
 export interface GridConfig {
@@ -38,6 +41,7 @@ interface RingDef {
   pitchDeg: number;
   count: number;
   tolerance: number;
+  pitchTol: number;
   required: boolean;
 }
 
@@ -60,35 +64,40 @@ export function buildCaptureGrid(config: Partial<GridConfig> = {}): CaptureTarge
       name: 'horizon',
       pitchDeg: 0,
       count: ringCount(0, step),
-      tolerance: 12,
+      tolerance: 14,
+      pitchTol: 18,
       required: true,
     },
     {
       name: 'upper',
       pitchDeg: 50,
       count: ringCount(50, step),
-      tolerance: 15,
+      tolerance: 16,
+      pitchTol: 14,
       required: true,
     },
     {
       name: 'lower',
       pitchDeg: -50,
       count: ringCount(-50, step),
-      tolerance: 15,
+      tolerance: 16,
+      pitchTol: 14,
       required: true,
     },
     {
       name: 'zenith',
       pitchDeg: 85,
       count: 1,
-      tolerance: 20,
+      tolerance: 22,
+      pitchTol: 12,
       required: cfg.capsRequired,
     },
     {
       name: 'nadir',
       pitchDeg: -85,
       count: 1,
-      tolerance: 20,
+      tolerance: 22,
+      pitchTol: 12,
       required: cfg.capsRequired,
     },
   ];
@@ -106,6 +115,7 @@ export function buildCaptureGrid(config: Partial<GridConfig> = {}): CaptureTarge
         ring: ring.name,
         required: ring.required,
         toleranceDeg: ring.tolerance,
+        pitchToleranceDeg: ring.pitchTol,
       });
     }
   }
@@ -136,11 +146,28 @@ export function sphericalDistance(
   return (Math.acos(Math.min(1, Math.max(-1, cos))) * 180) / Math.PI;
 }
 
+/** Shortest signed yaw delta from current to target, degrees in [-180, 180]. */
+export function shortestYawDeltaDeg(targetYaw: number, currentYaw: number): number {
+  let d = normalizeAngle(targetYaw) - normalizeAngle(currentYaw);
+  if (d > 180) d -= 360;
+  if (d < -180) d += 360;
+  return d;
+}
+
 export function isTargetAligned(
   target: CaptureTarget,
   currentYaw: number,
   currentPitch: number,
 ): boolean {
+  const yawErr = angleDiff(target.yawDeg, currentYaw);
+  const pitchErr = Math.abs(target.pitchDeg - currentPitch);
+
+  if (target.ring === 'horizon') {
+    return yawErr <= target.toleranceDeg && pitchErr <= target.pitchToleranceDeg;
+  }
+  if (target.ring === 'upper' || target.ring === 'lower') {
+    return yawErr <= target.toleranceDeg && pitchErr <= target.pitchToleranceDeg;
+  }
   return sphericalDistance(target.yawDeg, target.pitchDeg, currentYaw, currentPitch) <= target.toleranceDeg;
 }
 

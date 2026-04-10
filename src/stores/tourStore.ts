@@ -59,6 +59,12 @@ interface TourState {
     roomNames: string[],
     description?: string,
   ) => Promise<Tour>;
+  /** MVP: one tour + single default scene (no room list). */
+  createTourWithDefaultScene: (
+    title: string,
+    captureMode: CaptureMode,
+    description?: string,
+  ) => Promise<Tour>;
   updateTour: (id: string, updates: Partial<Tour>) => Promise<void>;
   deleteTour: (id: string) => Promise<void>;
 
@@ -222,6 +228,7 @@ export const useTourStore = create<TourState>((set, get) => ({
       created_at: now,
       hotspots: [],
       capture_set: null,
+      capture_session: null,
       capture_status: 'empty',
       stitch_status: 'idle',
       stitched_asset: null,
@@ -246,6 +253,25 @@ export const useTourStore = create<TourState>((set, get) => ({
     await saveTours(tours);
     set({ tours });
     return tour;
+  },
+
+  createTourWithDefaultScene: async (title, captureMode, description) => {
+    const tour = await get().createTour(title, captureMode, description);
+    const sceneType = captureMode === 'gaussian_splat'
+      ? 'gaussian_splat' as const
+      : captureMode === 'roomplan'
+        ? 'roomplan' as const
+        : 'panorama' as const;
+    const sceneName =
+      title.trim().length > 0 ? `${title.trim()} — görünüm` : 'Ana görünüm';
+    await get().addScene(tour.id, sceneName, sceneType);
+    const tours = await loadTours();
+    const updated = tours.find((t) => t.id === tour.id) ?? tour;
+    set({
+      tours,
+      currentTour: get().currentTour?.id === tour.id ? updated : get().currentTour,
+    });
+    return updated;
   },
 
   updateTour: async (id, updates) => {
@@ -294,6 +320,7 @@ export const useTourStore = create<TourState>((set, get) => ({
       created_at: now,
       hotspots: [],
       capture_set: null,
+      capture_session: null,
       capture_status: 'empty',
       stitch_status: 'idle',
       stitched_asset: null,
