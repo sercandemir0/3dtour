@@ -12,6 +12,10 @@ import {
   Platform,
   Switch,
 } from 'react-native';
+import {
+  getCaptureModeHelperText,
+  getShutterHelperText,
+} from './cameraGuidance';
 
 interface Props {
   capturedCount: number;
@@ -25,7 +29,6 @@ interface Props {
   onShutter: () => void;
   onReview: () => void;
   onToggleManual: () => void;
-  onClose: () => void;
 }
 
 export function CaptureHUD({
@@ -40,11 +43,16 @@ export function CaptureHUD({
   onShutter,
   onReview,
   onToggleManual,
-  onClose,
 }: Props) {
   // On web there's no gyro — allow shooting whenever manual shutter is on,
   // or when aligned (gyro-guided on native).
   const canShoot = (aligned || manualShutter) && !capturing;
+  const modeHelper = getCaptureModeHelperText(manualShutter);
+  const shutterHelper = getShutterHelperText({
+    manualShutter,
+    canShoot,
+    capturing,
+  });
 
   return (
     <View style={styles.wrap}>
@@ -68,6 +76,14 @@ export function CaptureHUD({
         ))}
       </View>
 
+      <View style={styles.helperCard}>
+        <Text style={styles.helperTitle}>
+          {manualShutter ? 'Manuel çekim' : 'Otomatik çekim'}
+        </Text>
+        <Text style={styles.helperText}>{modeHelper}</Text>
+        <Text style={styles.helperSubText}>{shutterHelper}</Text>
+      </View>
+
       {/* Controls */}
       <View style={styles.controls}>
         <TouchableOpacity
@@ -86,9 +102,7 @@ export function CaptureHUD({
           <View style={styles.shutterInner} />
         </TouchableOpacity>
 
-        <TouchableOpacity style={styles.closeBtn} onPress={onClose}>
-          <Text style={styles.closeText}>✕</Text>
-        </TouchableOpacity>
+        <View style={styles.sideSpacer} />
       </View>
 
       {/* Manual toggle */}
@@ -130,6 +144,34 @@ const styles = StyleSheet.create({
     gap: 4,
     marginBottom: 12,
   },
+  helperCard: {
+    backgroundColor: 'rgba(15,23,42,0.78)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.08)',
+    borderRadius: 14,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    marginBottom: 12,
+  },
+  helperTitle: {
+    color: '#fff',
+    fontSize: 14,
+    fontWeight: '700',
+    marginBottom: 4,
+    textAlign: 'center',
+  },
+  helperText: {
+    color: '#d1d5db',
+    fontSize: 12,
+    textAlign: 'center',
+    marginBottom: 4,
+  },
+  helperSubText: {
+    color: '#9ca3af',
+    fontSize: 12,
+    textAlign: 'center',
+    lineHeight: 17,
+  },
   dot: { width: 8, height: 8, borderRadius: 4 },
   dotDone: { backgroundColor: '#34d399' },
   dotPending: { backgroundColor: '#3f3f5a' },
@@ -154,15 +196,10 @@ const styles = StyleSheet.create({
   },
   shutterDisabled: { opacity: 0.35 },
   shutterInner: { width: 56, height: 56, borderRadius: 28, backgroundColor: '#fff' },
-  closeBtn: {
+  sideSpacer: {
     width: 42,
     height: 42,
-    borderRadius: 21,
-    backgroundColor: 'rgba(255,255,255,0.15)',
-    justifyContent: 'center',
-    alignItems: 'center',
   },
-  closeText: { color: '#fff', fontSize: 18, fontWeight: '600' },
   toggleRow: {
     flexDirection: 'row',
     justifyContent: 'center',

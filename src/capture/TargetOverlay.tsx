@@ -7,6 +7,7 @@ import { View, Text, StyleSheet, Dimensions } from 'react-native';
 import type { CaptureTarget } from './CaptureGrid';
 import { angleDiff, isTargetAligned, sphericalDistance } from './CaptureGrid';
 import type { DirectionHint } from './CaptureEngine';
+import { getOverlayCopy } from './cameraGuidance';
 
 interface Props {
   target: CaptureTarget | null;
@@ -83,16 +84,16 @@ export function TargetOverlay({
   const showRight = hint.yawDir === 'right';
   const showUp = hint.pitchDir === 'up';
   const showDown = hint.pitchDir === 'down';
-
-  const mainLabel = aligned
-    ? stable
-      ? 'Çekim hazır'
-      : 'Hizalandı — sabit tutun (~1 sn)'
-    : hint.label;
-
-  const subDegrees =
+  const copy = getOverlayCopy({
+    aligned,
+    stable,
+    hintLabel: hint.label,
+    yawDeltaDeg: hint.yawDeltaDeg,
+    pitchDeltaDeg: hint.pitchDeltaDeg,
+  });
+  const degreeHelp =
     !aligned && (Math.abs(hint.yawDeltaDeg) > 2 || Math.abs(hint.pitchDeltaDeg) > 2)
-      ? `Δ yaw ${hint.yawDeltaDeg > 0 ? '+' : ''}${Math.round(hint.yawDeltaDeg)}° · Δ pitch ${hint.pitchDeltaDeg > 0 ? '+' : ''}${Math.round(hint.pitchDeltaDeg)}°`
+      ? `Yaklaşık ${Math.round(Math.abs(hint.yawDeltaDeg))}° yatay, ${Math.round(Math.abs(hint.pitchDeltaDeg))}° dikey düzeltme kaldı`
       : null;
 
   return (
@@ -129,17 +130,18 @@ export function TargetOverlay({
         <View style={styles.progressTrack}>
           <View style={[styles.progressFill, { width: `${alignPct}%` as const, backgroundColor: colour }]} />
         </View>
-        <Text style={[styles.progressLabel, { color: colour }]}>Hizalama {alignPct}%</Text>
+        <Text style={[styles.progressLabel, { color: colour }]}>Hedefe yaklaşıyorsun %{alignPct}</Text>
       </View>
 
       <View style={styles.hintBox}>
-        <Text style={[styles.hintText, { color: colour }]}>{mainLabel}</Text>
-        {subDegrees ? <Text style={styles.subDegText}>{subDegrees}</Text> : null}
+        <Text style={[styles.hintText, { color: colour }]}>{copy.mainLabel}</Text>
+        {copy.secondaryLabel ? <Text style={styles.secondaryHintText}>{copy.secondaryLabel}</Text> : null}
+        {degreeHelp ? <Text style={styles.subDegText}>{degreeHelp}</Text> : null}
       </View>
 
       <View style={styles.ringLabel}>
         <Text style={styles.ringText}>
-          {ringLabel} • {capturedCount}/{totalTargets}
+          {ringLabel} hedefi • {capturedCount}/{totalTargets} kare
         </Text>
       </View>
     </View>
@@ -227,11 +229,21 @@ const styles = StyleSheet.create({
     textShadowOffset: { width: 0, height: 1 },
     textShadowRadius: 4,
   },
+  secondaryHintText: {
+    marginTop: 6,
+    fontSize: 14,
+    fontWeight: '600',
+    color: 'rgba(255,255,255,0.92)',
+    textAlign: 'center',
+    textShadowColor: '#000',
+    textShadowOffset: { width: 0, height: 1 },
+    textShadowRadius: 3,
+  },
   subDegText: {
     marginTop: 6,
-    fontSize: 13,
-    fontWeight: '600',
-    color: 'rgba(255,255,255,0.75)',
+    fontSize: 12,
+    fontWeight: '500',
+    color: 'rgba(255,255,255,0.7)',
     textShadowColor: '#000',
     textShadowOffset: { width: 0, height: 1 },
     textShadowRadius: 3,

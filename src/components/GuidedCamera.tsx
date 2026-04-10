@@ -34,9 +34,11 @@ import type { QualityReport } from '@/src/capture/QualityGate';
 import { TargetOverlay } from '@/src/capture/TargetOverlay';
 import { CaptureHUD } from '@/src/capture/CaptureHUD';
 import { CaptureReview } from '@/src/capture/CaptureReview';
+import { getCameraStatusModel } from '@/src/capture/cameraGuidance';
 
 const STABLE_DPS = 5;
 const STABLE_MS = 350;
+let hasShownCameraIntroThisSession = false;
 
 // -- Public payload type (consumed by camera.tsx) --
 
@@ -50,6 +52,7 @@ interface Props {
   sceneName: string;
   nextSceneName?: string;
   roomProgressLabel?: string;
+  showIntroOnStart?: boolean;
   onComplete: (payload: GuidedCapturePayload) => void;
   onClose: () => void;
 }
@@ -58,6 +61,7 @@ export function GuidedCamera({
   sceneName,
   nextSceneName,
   roomProgressLabel,
+  showIntroOnStart = false,
   onComplete,
   onClose,
 }: Props) {
@@ -74,6 +78,11 @@ export function GuidedCamera({
   const [capturing, setCapturing] = useState(false);
   const autoTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const prevAlignedRef = useRef(false);
+  const introShownRef = useRef(false);
+  const prevFrameCountRef = useRef(0);
+  const successTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [showIntroCard, setShowIntroCard] = useState(false);
+  const [successCue, setSuccessCue] = useState<string | null>(null);
 
   useEffect(() => {
     if (state.phase !== 'capturing') {
@@ -85,6 +94,39 @@ export function GuidedCamera({
     }
     prevAlignedRef.current = state.aligned;
   }, [state.phase, state.aligned]);
+
+  useEffect(() => {
+    if (
+      showIntroOnStart
+      && state.phase === 'capturing'
+      && !introShownRef.current
+      && !hasShownCameraIntroThisSession
+    ) {
+      introShownRef.current = true;
+      hasShownCameraIntroThisSession = true;
+      setShowIntroCard(true);
+    }
+  }, [showIntroOnStart, state.phase]);
+
+  useEffect(() => {
+    if (state.frames.length === 1 && prevFrameCountRef.current === 0) {
+      setSuccessCue('İlk kare tamamlandı. Şimdi sonraki hedefe dönün.');
+      if (successTimerRef.current) clearTimeout(successTimerRef.current);
+      successTimerRef.current = setTimeout(() => {
+        setSuccessCue(null);
+        successTimerRef.current = null;
+      }, 2200);
+    }
+    prevFrameCountRef.current = state.frames.length;
+  }, [state.frames.length]);
+
+  useEffect(() => {
+    return () => {
+      if (successTimerRef.current) {
+        clearTimeout(successTimerRef.current);
+      }
+    };
+  }, []);
 
   // -- Permission → leveling transition (done in effect, not during render) --
   useEffect(() => {
@@ -140,6 +182,7 @@ export function GuidedCamera({
     if (!cameraRef.current || !s.currentTarget || capturingRef.current) return;
     capturingRef.current = true;
     setCapturing(true);
+    setState((prev) => ({ ...prev, captureSubPhase: 'shutter' }));
 
     try {
       const photo = await cameraRef.current.takePictureAsync({ quality: 0.85 });
@@ -200,6 +243,7 @@ export function GuidedCamera({
     if (
       phase !== 'capturing' ||
       manualShutter ||
+      showIntroCard ||
       !aligned ||
       !stable ||
       !currentTarget ||
@@ -221,7 +265,7 @@ export function GuidedCamera({
       }
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [state.phase, state.aligned, state.stable, state.manualShutter, state.currentTarget?.id, cameraReady, doCapture]);
+  }, [state.phase, state.aligned, state.stable, state.manualShutter, state.currentTarget?.id, cameraReady, doCapture, showIntroCard]);
 
   // -- Phase transitions --
 
@@ -258,6 +302,14 @@ export function GuidedCamera({
 
   const stats = getCompletionStats(state.targets, state.completedIds);
   const isLevel = trackerRef.current.isLevel();
+  const statusModel = getCameraStatusModel({
+    captureSubPhase: capturing ? 'shutter' : state.captureSubPhase,
+    aligned: state.aligned,
+    stable: state.stable,
+    capturing,
+    manualShutter: state.manualShutter,
+    hasCapturedFrames: state.frames.length > 0,
+  });
 
   // -- Permission screen --
 
@@ -381,6 +433,26 @@ export function GuidedCamera({
         {/* Capturing phase — overlay + HUD */}
         {state.phase === 'capturing' && (
           <>
+            <View
+              style={[
+                styles.statusBanner,
+                statusModel.tone === 'success'
+                  ? styles.statusBannerSuccess
+                  : statusModel.tone === 'warning'
+                    ? styles.statusBannerWarning
+                    : styles.statusBannerNeutral,
+              ]}
+            >
+              <Text style={styles.statusTitle}>{statusModel.title}</Text>
+              <Text style={styles.statusBody}>{statusModel.detail}</Text>
+            </View>
+
+            {successCue ? (
+              <View style={styles.successToast}>
+                <Text style={styles.successToastText}>{successCue}</Text>
+              </View>
+            ) : null}
+
             <TargetOverlay
               target={state.currentTarget}
               currentYaw={state.orientation.yawDeg}
@@ -403,8 +475,34 @@ export function GuidedCamera({
               onShutter={doCapture}
               onReview={onGoReview}
               onToggleManual={onToggleManual}
-              onClose={onClose}
             />
+
+            {showIntroCard ? (
+              <View style={styles.introOverlay}>
+                <View style={styles.introCard}>
+                  <Text style={styles.introEyebrow}>NASIL ÇALIŞIR</Text>
+                  <Text style={styles.introTitle}>Kamera sizi yönlendirecek</Text>
+                  <View style={styles.introStep}>
+                    <Text style={styles.introStepIndex}>1</Text>
+                    <Text style={styles.introStepText}>Oku takip edin ve telefonu hedefe çevirin.</Text>
+                  </View>
+                  <View style={styles.introStep}>
+                    <Text style={styles.introStepIndex}>2</Text>
+                    <Text style={styles.introStepText}>Nişan yeşile dönünce telefonu sabit tutun.</Text>
+                  </View>
+                  <View style={styles.introStep}>
+                    <Text style={styles.introStepIndex}>3</Text>
+                    <Text style={styles.introStepText}>Otomatik çekim açık. İsterseniz manuel moda geçebilirsiniz.</Text>
+                  </View>
+                  <TouchableOpacity
+                    style={styles.primaryBtn}
+                    onPress={() => setShowIntroCard(false)}
+                  >
+                    <Text style={styles.primaryBtnText}>Anladım, başlayalım</Text>
+                  </TouchableOpacity>
+                </View>
+              </View>
+            ) : null}
           </>
         )}
       </CameraView>
@@ -459,6 +557,54 @@ const styles = StyleSheet.create({
   topProgress: { color: '#c4b5fd', fontSize: 11, fontWeight: '700', marginBottom: 2 },
   topScene: { color: '#fff', fontSize: 16, fontWeight: '600' },
   topNext: { color: '#9ca3af', fontSize: 12, marginTop: 2 },
+  statusBanner: {
+    position: 'absolute',
+    top: Platform.OS === 'ios' ? 118 : 96,
+    left: 16,
+    right: 16,
+    borderRadius: 16,
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    borderWidth: 1,
+  },
+  statusBannerNeutral: {
+    backgroundColor: 'rgba(15,23,42,0.82)',
+    borderColor: 'rgba(255,255,255,0.08)',
+  },
+  statusBannerWarning: {
+    backgroundColor: 'rgba(120,53,15,0.88)',
+    borderColor: 'rgba(251,191,36,0.35)',
+  },
+  statusBannerSuccess: {
+    backgroundColor: 'rgba(6,78,59,0.88)',
+    borderColor: 'rgba(52,211,153,0.35)',
+  },
+  statusTitle: { color: '#fff', fontSize: 15, fontWeight: '700', textAlign: 'center' },
+  statusBody: {
+    color: 'rgba(255,255,255,0.82)',
+    fontSize: 13,
+    lineHeight: 18,
+    marginTop: 4,
+    textAlign: 'center',
+  },
+  successToast: {
+    position: 'absolute',
+    top: Platform.OS === 'ios' ? 188 : 166,
+    left: 32,
+    right: 32,
+    backgroundColor: 'rgba(6,78,59,0.94)',
+    borderRadius: 999,
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    borderWidth: 1,
+    borderColor: 'rgba(52,211,153,0.35)',
+  },
+  successToastText: {
+    color: '#ecfdf5',
+    fontSize: 13,
+    fontWeight: '700',
+    textAlign: 'center',
+  },
 
   panel: {
     marginHorizontal: 16,
@@ -473,4 +619,56 @@ const styles = StyleSheet.create({
   badge: { padding: 12, borderRadius: 12, backgroundColor: '#3f2f2f', marginBottom: 14 },
   badgeOk: { backgroundColor: '#14532d88' },
   badgeText: { color: '#e5e7eb', textAlign: 'center', fontSize: 14 },
+  introOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(2,6,23,0.72)',
+    justifyContent: 'center',
+    paddingHorizontal: 18,
+  },
+  introCard: {
+    backgroundColor: 'rgba(15,23,42,0.96)',
+    borderRadius: 24,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.08)',
+    padding: 22,
+  },
+  introEyebrow: {
+    color: '#c4b5fd',
+    fontSize: 11,
+    fontWeight: '800',
+    letterSpacing: 1.2,
+    textAlign: 'center',
+    marginBottom: 8,
+  },
+  introTitle: {
+    color: '#fff',
+    fontSize: 22,
+    fontWeight: '800',
+    textAlign: 'center',
+    marginBottom: 18,
+  },
+  introStep: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 12,
+    marginBottom: 12,
+  },
+  introStepIndex: {
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    overflow: 'hidden',
+    backgroundColor: '#8b5cf6',
+    color: '#fff',
+    textAlign: 'center',
+    lineHeight: 24,
+    fontWeight: '800',
+    fontSize: 12,
+  },
+  introStepText: {
+    flex: 1,
+    color: '#d1d5db',
+    fontSize: 14,
+    lineHeight: 20,
+  },
 });

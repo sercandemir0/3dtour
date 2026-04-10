@@ -78,6 +78,7 @@ export default function CameraScreen() {
           ? undefined
           : `Görünüm ${currentIdx + 1}/${scenes.length}`
       }
+      showIntroOnStart={currentIdx === 0}
       onComplete={handleComplete}
       onClose={() => router.back()}
     />
