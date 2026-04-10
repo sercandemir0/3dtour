@@ -1,9 +1,10 @@
-import { useRef, useMemo } from 'react';
-import { View, StyleSheet, Text } from 'react-native';
+import { useRef, useMemo, useState, useEffect } from 'react';
+import { View, StyleSheet, Text, ActivityIndicator } from 'react-native';
 import { WebView } from 'react-native-webview';
 import type { Scene } from '@/src/types/tour';
 import { getGuidedPanoramaUris } from '@/src/utils/sceneProjection';
 import { getSceneStitchedAsset, getSceneViewerMode } from '@/src/utils/sceneState';
+import { resolveToDataUri, resolveAllToDataUri } from '@/src/utils/imageUri';
 
 interface Props {
   scene: Scene;
@@ -20,6 +21,37 @@ export function PanoramaViewerMobile({ scene, scenes, onHotspotClick }: Props) {
     [scene, viewerMode],
   );
 
+  const [resolvedImageUrl, setResolvedImageUrl] = useState<string | null>(null);
+  const [resolvedGuidedUris, setResolvedGuidedUris] = useState<string[] | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+
+    const rawUrl = stitchedUri ?? scene.panorama_url ?? '';
+
+    (async () => {
+      try {
+        const resolved = rawUrl ? await resolveToDataUri(rawUrl) : '';
+        const resolvedGuided = guidedUris ? await resolveAllToDataUri(guidedUris) : null;
+        if (!cancelled) {
+          setResolvedImageUrl(resolved);
+          setResolvedGuidedUris(resolvedGuided);
+        }
+      } catch {
+        if (!cancelled) {
+          setResolvedImageUrl(rawUrl);
+          setResolvedGuidedUris(guidedUris);
+        }
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+
+    return () => { cancelled = true; };
+  }, [stitchedUri, scene.panorama_url, guidedUris]);
+
   const hotspots = (scene.hotspots ?? [])
     .filter((h) => h.target_scene_id && h.yaw != null && h.pitch != null)
     .map((h) => ({
@@ -32,8 +64,10 @@ export function PanoramaViewerMobile({ scene, scenes, onHotspotClick }: Props) {
     }));
 
   const html = useMemo(
-    () => generatePannellumHTML(stitchedUri ?? scene.panorama_url ?? '', hotspots, guidedUris),
-    [scene.id, stitchedUri, scene.panorama_url, guidedUris, JSON.stringify(hotspots)],
+    () => resolvedImageUrl != null
+      ? generatePannellumHTML(resolvedImageUrl, hotspots, resolvedGuidedUris)
+      : null,
+    [resolvedImageUrl, resolvedGuidedUris, JSON.stringify(hotspots)],
   );
 
   const handleMessage = (event: any) => {
@@ -46,6 +80,15 @@ export function PanoramaViewerMobile({ scene, scenes, onHotspotClick }: Props) {
   };
 
   if (!stitchedUri && !scene.panorama_url && !guidedUris?.length) return null;
+
+  if (loading || !html) {
+    return (
+      <View style={[styles.container, { justifyContent: 'center', alignItems: 'center' }]}>
+        <ActivityIndicator size="large" color="#8b5cf6" />
+        <Text style={{ color: '#9ca3af', marginTop: 12 }}>Panorama hazırlanıyor…</Text>
+      </View>
+    );
+  }
 
   return (
     <View style={styles.container}>

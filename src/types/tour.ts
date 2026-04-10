@@ -3,13 +3,18 @@ export type TourStatus = 'draft' | 'processing' | 'published' | 'archived';
 export type SceneType = 'panorama' | 'gaussian_splat' | 'roomplan';
 export type SceneMediaType = 'photo' | 'video_frame' | 'camera' | null;
 export type HotspotIconType = 'navigate' | 'info' | 'link';
-export type JobType = 'panorama_stitch' | 'gaussian_splat' | 'video_extract';
+export type JobType = 'panorama_stitch' | 'gaussian_splat' | 'video_extract' | 'video_sweep_stitch';
 export type JobStatus = 'pending' | 'processing' | 'completed' | 'failed';
-export type SceneProjectionKind = 'single_image' | 'guided_strip_360';
+export type SceneProjectionKind = 'single_image' | 'guided_strip_360' | 'video_sweep_strip' | 'equirect_grid';
 export type SceneProjectionProvider = 'local' | 'remote';
+export type StitchStatus = 'idle' | 'queued' | 'processing' | 'completed' | 'failed';
+
+// ---------------------------------------------------------------------------
+// Legacy 6-direction types (kept for backward-compat, will be removed later)
+// ---------------------------------------------------------------------------
 export type CaptureDirection = 'front' | 'right' | 'back' | 'left' | 'up' | 'down';
 export type CaptureStatus = 'empty' | 'partial' | 'complete';
-export type StitchStatus = 'idle' | 'queued' | 'processing' | 'completed' | 'failed';
+export type CaptureMethod = 'discrete_6dir' | 'video_sweep';
 
 export const CAPTURE_DIRECTIONS: CaptureDirection[] = [
   'front',
@@ -19,28 +24,6 @@ export const CAPTURE_DIRECTIONS: CaptureDirection[] = [
   'up',
   'down',
 ];
-
-export interface Vector3 {
-  x: number;
-  y: number;
-  z: number;
-}
-
-export interface Profile {
-  id: string;
-  full_name: string | null;
-  company: string | null;
-  avatar_url: string | null;
-  created_at: string;
-}
-
-/** One captured frame during guided sweep (photo or extracted from video). */
-export interface SceneCaptureSource {
-  uri: string;
-  yawDeg?: number;
-  atMs?: number;
-  sectorIndex?: number;
-}
 
 export interface SceneCaptureShot {
   uri: string;
@@ -58,6 +41,97 @@ export interface SceneCaptureSet {
   shots: Partial<Record<CaptureDirection, SceneCaptureShot>>;
   primary_direction: CaptureDirection | null;
   finalized_at: string | null;
+}
+
+// ---------------------------------------------------------------------------
+// New v2 capture session types (spherical grid)
+// ---------------------------------------------------------------------------
+
+export interface CaptureFrame {
+  id: number;
+  uri: string;
+  yawDeg: number;
+  pitchDeg: number;
+  rollDeg: number;
+  timestamp: string;
+  blurScore: number;
+  brightnessAvg: number;
+  validation: 'passed' | 'warning' | 'failed';
+}
+
+export interface CaptureSession {
+  version: 2;
+  gridConfig: {
+    cameraFovDeg: number;
+    overlapRatio: number;
+    totalTargets: number;
+  };
+  frames: CaptureFrame[];
+  completedTargetIds: number[];
+  refQuaternion: [number, number, number, number];
+  startedAt: string;
+  finalizedAt: string | null;
+  deviceInfo: {
+    cameraFov: number;
+    platform: string;
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Shared / general types
+// ---------------------------------------------------------------------------
+
+export interface SweepTelemetryPoint {
+  atMs: number;
+  yawDeg: number;
+  pitchDeg: number;
+  rollDeg: number;
+}
+
+export interface SweepFrame {
+  uri: string;
+  atMs: number;
+  yawDeg: number;
+  pitchDeg: number;
+  quality: 'good' | 'blurry' | 'fast_motion';
+  sectorIndex: number;
+}
+
+export interface SweepCaptureData {
+  version: 2;
+  method: CaptureMethod;
+  videoUri: string | null;
+  videoDurationMs: number;
+  telemetry: SweepTelemetryPoint[];
+  extractedFrames: SweepFrame[];
+  supplementUpUri: string | null;
+  supplementDownUri: string | null;
+  coverageDeg: number;
+  avgSpeedDegPerSec: number;
+  qualityScore: number;
+  startedAt: string;
+  completedAt: string;
+}
+
+export interface Vector3 {
+  x: number;
+  y: number;
+  z: number;
+}
+
+export interface Profile {
+  id: string;
+  full_name: string | null;
+  company: string | null;
+  avatar_url: string | null;
+  created_at: string;
+}
+
+export interface SceneCaptureSource {
+  uri: string;
+  yawDeg?: number;
+  atMs?: number;
+  sectorIndex?: number;
 }
 
 export interface SceneProjection {
@@ -110,19 +184,19 @@ export interface Scene {
   camera_target: Vector3 | null;
   created_at: string;
   hotspots?: Hotspot[];
+  /** @deprecated Use capture_session instead */
   capture_set?: SceneCaptureSet | null;
+  /** New v2 capture session (spherical grid). */
+  capture_session?: CaptureSession | null;
   capture_status?: CaptureStatus;
   stitch_status?: StitchStatus;
   stitched_asset?: SceneStitchedAsset | null;
   preview_projection?: SceneProjection | null;
-  /** Raw captures from guided sweep; optional for legacy scenes. */
   capture_sources?: SceneCaptureSource[];
-  /** Length 6: horizontal sector i covered if true (see sectorCoverage util). */
   coverage_sector_mask?: boolean[];
-  /** Persisted projection contract for stitched or raw scene playback. */
   projection?: SceneProjection | null;
-  /** Optional remote/local processing state for this scene projection. */
   processing_job?: ProcessingJob | null;
+  sweep_data?: SweepCaptureData | null;
 }
 
 export interface Hotspot {

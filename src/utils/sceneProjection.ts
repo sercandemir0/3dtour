@@ -1,5 +1,6 @@
 import type {
   SceneCaptureSet,
+  CaptureSession,
   Scene,
   SceneCaptureSource,
   SceneProjection,
@@ -83,6 +84,19 @@ export function buildPreviewProjectionFromCaptureSet(
   };
 }
 
+export function buildProjectionFromCaptureSession(
+  session?: CaptureSession | null,
+): SceneProjection | null {
+  if (!session || session.frames.length === 0) return null;
+  return {
+    version: 1,
+    kind: 'equirect_grid',
+    source_uris: session.frames.map((f) => f.uri),
+    provider: 'local',
+    coverage_sector_count: session.frames.length,
+  };
+}
+
 export function getSceneProjection(scene: Scene): SceneProjection {
   if (scene.preview_projection?.source_uris?.length) {
     return {
@@ -97,6 +111,9 @@ export function getSceneProjection(scene: Scene): SceneProjection {
       provider: scene.projection.provider ?? 'local',
     };
   }
+
+  const sessionProjection = buildProjectionFromCaptureSession(scene.capture_session);
+  if (sessionProjection) return sessionProjection;
 
   const previewProjection = buildPreviewProjectionFromCaptureSet(scene.capture_set);
   if (previewProjection) {

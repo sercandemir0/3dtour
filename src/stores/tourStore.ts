@@ -12,6 +12,7 @@ import type {
   SceneCaptureShot,
   SceneProjection,
   ProcessingJob,
+  CaptureSession,
 } from '@/src/types/tour';
 import { CAPTURE_DIRECTIONS } from '@/src/types/tour';
 import {
@@ -85,6 +86,7 @@ interface TourState {
       mediaType: SceneMediaType;
     },
   ) => Promise<{ projection: SceneProjection; processingJob: ProcessingJob | null }>;
+  saveCaptureSession: (sceneId: string, session: CaptureSession) => Promise<void>;
   reorderScenes: (tourId: string, sceneIds: string[]) => Promise<void>;
   reconcileSceneProcessing: (sceneId: string) => Promise<void>;
   reconcileTourProcessing: (tourId: string) => Promise<void>;
@@ -121,7 +123,8 @@ function updateSceneInTours(
 
 function normalizeScene(scene: Scene): Scene {
   const captureSet = scene.capture_set ?? null;
-  const captureStatus = scene.capture_status ?? deriveCaptureStatus(captureSet);
+  const captureSession = scene.capture_session ?? null;
+  const captureStatus = scene.capture_status ?? deriveCaptureStatus(captureSet, captureSession);
   const previewProjection = scene.preview_projection
     ?? buildPreviewProjectionFromCaptureSet(captureSet)
     ?? scene.projection
@@ -574,6 +577,33 @@ export const useTourStore = create<TourState>((set, get) => ({
       },
       processingJob,
     };
+  },
+
+  saveCaptureSession: async (sceneId, session) => {
+    const scene = findScene(get().tours, sceneId);
+    const firstFrame = session.frames[0];
+    const thumbnailUri = firstFrame?.uri ?? null;
+
+    const projection: SceneProjection = {
+      version: 1,
+      kind: 'equirect_grid',
+      source_uris: session.frames.map((f) => f.uri),
+      provider: 'local',
+      coverage_sector_count: session.frames.length,
+    };
+
+    await get().updateScene(sceneId, {
+      media_type: 'camera',
+      capture_session: session,
+      capture_status: session.frames.length >= (session.gridConfig.totalTargets * 0.7) ? 'complete' : 'partial',
+      stitch_status: 'idle',
+      stitched_asset: null,
+      preview_projection: projection,
+      projection,
+      panorama_url: null,
+      thumbnail_url: thumbnailUri,
+      processing_job: null,
+    });
   },
 
   reorderScenes: async (tourId, sceneIds) => {

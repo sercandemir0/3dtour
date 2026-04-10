@@ -1,6 +1,7 @@
 import type {
   CaptureDirection,
   CaptureStatus,
+  CaptureSession,
   Scene,
   SceneCaptureSet,
   SceneCaptureShot,
@@ -58,7 +59,12 @@ export function countCaptureShots(captureSet?: SceneCaptureSet | null): number {
   return getOrderedCaptureShots(captureSet).length;
 }
 
-export function deriveCaptureStatus(captureSet?: SceneCaptureSet | null): CaptureStatus {
+export function deriveCaptureStatus(captureSet?: SceneCaptureSet | null, captureSession?: CaptureSession | null): CaptureStatus {
+  if (captureSession) {
+    if (captureSession.frames.length === 0) return 'empty';
+    const ratio = captureSession.frames.length / captureSession.gridConfig.totalTargets;
+    return ratio >= 0.7 ? 'complete' : 'partial';
+  }
   const count = countCaptureShots(captureSet);
   if (count === 0) {
     return 'empty';
@@ -74,7 +80,9 @@ export function isCaptureSetComplete(captureSet?: SceneCaptureSet | null): boole
 }
 
 function isGuidedPreviewProjection(projection?: SceneProjection | null): boolean {
-  return projection?.kind === 'guided_strip_360' && projection.source_uris.length === CAPTURE_DIRECTIONS.length;
+  if (!projection) return false;
+  if (projection.kind === 'equirect_grid' && projection.source_uris.length > 0) return true;
+  return projection.kind === 'guided_strip_360' && projection.source_uris.length === CAPTURE_DIRECTIONS.length;
 }
 
 export function deriveLegacyStitchedAsset(scene: Scene): SceneStitchedAsset | null {
@@ -117,7 +125,7 @@ export function deriveStitchStatus(scene: Scene): StitchStatus {
 }
 
 export function getSceneCaptureStatus(scene: Scene): CaptureStatus {
-  return scene.capture_status ?? deriveCaptureStatus(scene.capture_set);
+  return scene.capture_status ?? deriveCaptureStatus(scene.capture_set, scene.capture_session);
 }
 
 export function getSceneStitchedAsset(scene: Scene): SceneStitchedAsset | null {

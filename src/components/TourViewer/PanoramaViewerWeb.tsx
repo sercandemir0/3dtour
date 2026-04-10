@@ -5,6 +5,7 @@ import * as THREE from 'three';
 import type { Scene } from '@/src/types/tour';
 import { getGuidedPanoramaUris } from '@/src/utils/sceneProjection';
 import { getSceneStitchedAsset, getSceneViewerMode } from '@/src/utils/sceneState';
+import { resolveToDataUri } from '@/src/utils/imageUri';
 
 interface Props {
   scene: Scene;
@@ -190,36 +191,25 @@ export function PanoramaViewerWeb({ scene, scenes, onHotspotClick }: Props) {
 
   useEffect(() => {
     let cancelled = false;
-
-    if (!guidedUris?.length) {
-      setPanoramaUrl(fallbackPanoramaUrl);
-      setLoadingProjection(false);
-      return () => {
-        cancelled = true;
-      };
-    }
-
     setLoadingProjection(true);
-    void buildGuidedPanoramaTexture(guidedUris)
-      .then((dataUrl) => {
-        if (!cancelled) {
-          setPanoramaUrl(dataUrl);
-        }
-      })
-      .catch(() => {
-        if (!cancelled) {
-          setPanoramaUrl(fallbackPanoramaUrl);
-        }
-      })
-      .finally(() => {
-        if (!cancelled) {
-          setLoadingProjection(false);
-        }
-      });
 
-    return () => {
-      cancelled = true;
-    };
+    (async () => {
+      try {
+        if (guidedUris?.length) {
+          const dataUrl = await buildGuidedPanoramaTexture(guidedUris);
+          if (!cancelled) setPanoramaUrl(dataUrl);
+        } else {
+          const resolved = await resolveToDataUri(fallbackPanoramaUrl);
+          if (!cancelled) setPanoramaUrl(resolved);
+        }
+      } catch {
+        if (!cancelled) setPanoramaUrl(fallbackPanoramaUrl);
+      } finally {
+        if (!cancelled) setLoadingProjection(false);
+      }
+    })();
+
+    return () => { cancelled = true; };
   }, [fallbackPanoramaUrl, guidedUris]);
 
   if (!fallbackPanoramaUrl && !guidedUris?.length) return null;
