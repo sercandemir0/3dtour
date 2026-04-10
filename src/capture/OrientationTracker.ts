@@ -87,10 +87,19 @@ export class OrientationTracker {
 
   /**
    * Pitch derived from gravity (beta). Drift-free.
-   * Returns -90..+90 where 0 = device held upright landscape, positive = tilted up.
+   *
+   * expo-sensors DeviceMotion.rotation.beta ranges roughly:
+   *   - Phone flat on table face-up:  beta ≈ 0°
+   *   - Phone upright portrait:       beta ≈ 90°
+   *   - Phone upside down portrait:   beta ≈ 180°
+   *
+   * We want panorama pitch 0° = "ufku görüyor" (upright portrait, beta≈90°).
+   * So we shift: panoramaPitch = beta - 90, clamped to [-90, +90].
+   * Positive panoramaPitch = camera tilted upward.
    */
   private _gravityPitchDeg(): number {
-    return Math.max(-90, Math.min(90, this._latestBetaDeg));
+    const shifted = this._latestBetaDeg - 90;
+    return Math.max(-90, Math.min(90, shifted));
   }
 
   /**
@@ -102,10 +111,17 @@ export class OrientationTracker {
     return normalizeAngle(this._radToDeg(diff));
   }
 
-  /** True if the device is roughly level (appropriate for panorama capture). */
+  /** True if the device is roughly level (upright portrait) for panorama capture.
+   *
+   *  After the beta-90° shift, panoramaPitch ≈ 0 means phone is upright.
+   *  "Level enough": panoramaPitch within ±25°, gamma (side-tilt) within ±25°.
+   */
   isLevel(): boolean {
     if (Platform.OS === 'web') return true;
-    return Math.abs(this._latestBetaDeg) < 14 && Math.abs(this._latestGammaDeg - 90) < 18;
+    const panoramaPitch = this._latestBetaDeg - 90;
+    const pitchOk = Math.abs(panoramaPitch) < 25;
+    const gammaOk = Math.abs(this._latestGammaDeg) < 25;
+    return pitchOk && gammaOk;
   }
 
   getCurrent(): Orientation {
@@ -152,7 +168,9 @@ export class OrientationTracker {
     for (let i = 1; i < recent.length; i++) {
       const dt = (recent[i].ts - recent[i - 1].ts) / 1000;
       if (dt <= 0) continue;
-      const dYaw = Math.abs(recent[i].yaw - recent[i - 1].yaw);
+      // Handle yaw wrap-around (e.g. 359° → 1° = 2°, not 358°)
+      let dYaw = Math.abs(recent[i].yaw - recent[i - 1].yaw);
+      if (dYaw > 180) dYaw = 360 - dYaw;
       const dPitch = Math.abs(recent[i].pitch - recent[i - 1].pitch);
       const speed = Math.sqrt(dYaw * dYaw + dPitch * dPitch) / dt;
       if (speed > thresholdDegPerSec) return false;

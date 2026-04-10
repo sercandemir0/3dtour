@@ -42,7 +42,9 @@ export function CaptureHUD({
   onToggleManual,
   onClose,
 }: Props) {
-  const canShoot = aligned && (manualShutter || stable) && !capturing;
+  // On web there's no gyro — allow shooting whenever manual shutter is on,
+  // or when aligned (gyro-guided on native).
+  const canShoot = (aligned || manualShutter) && !capturing;
 
   return (
     <View style={styles.wrap}>

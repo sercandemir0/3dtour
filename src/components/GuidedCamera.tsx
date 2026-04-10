@@ -69,34 +69,115 @@ export function GuidedCamera({
   const capturingRef = useRef(false);
   const autoTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // -- Sensor lifecycle --
+  // -- Permission → leveling transition (done in effect, not during render) --
+  useEffect(() => {
+    if (permission?.granted && stateRef.current.phase === 'permission') {
+      setState((s) => advanceToLeveling(s));
+    }
+  }, [permission?.granted]);
 
+  // -- Sensor lifecycle --
   useEffect(() => {
     const tracker = trackerRef.current;
-    tracker.start();
-    const unsub = tracker.addListener((o) => {
-      setState((s) => {
-        let next = updateOrientation(s, o);
-        const stable = tracker.isStable(3, 500);
-        next = markStable(next, stable);
-        return next;
+
+    // On web there's no sensor; keep pushing a static orientation on an
+    // interval so the state machine can progress and the HUD stays live.
+    if (Platform.OS === 'web') {
+      const pushWebOrientation = () => {
+        const webOrientation = {
+          yawDeg: 0, pitchDeg: 0, rollDeg: 0,
+          angularVelocityDegPerSec: 0, timestamp: Date.now(),
+        };
+        setState((s) => {
+          let next = updateOrientation(s, webOrientation);
+          next = markStable(next, true);
+          return next;
+        });
+      };
+      pushWebOrientation();
+      const interval = setInterval(pushWebOrientation, 500);
+      return () => clearInterval(interval);
+    }
+
+    tracker.start().then((granted) => {
+      if (!granted) return;
+      tracker.addListener((o) => {
+        setState((s) => {
+          let next = updateOrientation(s, o);
+          const stable = tracker.isStable(3, 500);
+          next = markStable(next, stable);
+          return next;
+        });
       });
     });
+
     return () => {
-      unsub();
       tracker.stop();
     };
   }, []);
 
-  // -- Auto-shutter logic --
+  // -- Core capture function --
 
+  const doCapture = useCallback(async () => {
+    const s = stateRef.current;
+    if (!cameraRef.current || !s.currentTarget || capturingRef.current) return;
+    capturingRef.current = true;
+
+    try {
+      const photo = await cameraRef.current.takePictureAsync({ quality: 0.85 });
+      if (!photo?.uri) return;
+
+      let report: QualityReport = { blurScore: 999, brightnessAvg: 128, validation: 'passed', issues: [] };
+
+      try {
+        // Thumbnail for potential future quality analysis
+        await manipulateAsync(photo.uri, [{ resize: { width: 320 } }], {
+          compress: 0.6,
+          format: SaveFormat.JPEG,
+        });
+        report = { blurScore: 200, brightnessAvg: 128, validation: 'passed', issues: [] };
+      } catch {
+        // Quality check failed — proceed without blocking
+      }
+
+      const wasStable = trackerRef.current.isStable(3, 500);
+      if (!wasStable) {
+        report.issues.push('Cihaz hareket halindeydi');
+        if (report.validation !== 'failed') report.validation = 'warning';
+      }
+
+      const o = trackerRef.current.getCurrent();
+      const currentTarget = stateRef.current.currentTarget;
+      if (!currentTarget) return;
+
+      const frame: CaptureFrame = {
+        id: currentTarget.id,
+        uri: photo.uri,
+        yawDeg: o.yawDeg,
+        pitchDeg: o.pitchDeg,
+        rollDeg: o.rollDeg,
+        timestamp: new Date().toISOString(),
+        blurScore: report.blurScore,
+        brightnessAvg: report.brightnessAvg,
+        validation: report.validation,
+      };
+
+      setState((prev) => recordFrame(prev, frame, report));
+    } catch {
+      Alert.alert('Hata', 'Fotoğraf çekilemedi');
+    } finally {
+      capturingRef.current = false;
+    }
+  }, []);
+
+  // -- Auto-shutter logic --
   useEffect(() => {
     if (autoTimerRef.current) {
       clearTimeout(autoTimerRef.current);
       autoTimerRef.current = null;
     }
 
-    const { phase, captureSubPhase, aligned, stable, manualShutter, currentTarget } = state;
+    const { phase, aligned, stable, manualShutter, currentTarget } = state;
     if (
       phase !== 'capturing' ||
       manualShutter ||
@@ -120,65 +201,10 @@ export function GuidedCamera({
         autoTimerRef.current = null;
       }
     };
-  }, [state.phase, state.aligned, state.stable, state.manualShutter, state.currentTarget?.id, cameraReady]);
-
-  // -- Core capture function --
-
-  const doCapture = useCallback(async () => {
-    const s = stateRef.current;
-    if (!cameraRef.current || !s.currentTarget || capturingRef.current) return;
-    capturingRef.current = true;
-
-    try {
-      const photo = await cameraRef.current.takePictureAsync({ quality: 0.85 });
-      if (!photo?.uri) return;
-
-      let report: QualityReport = { blurScore: 999, brightnessAvg: 128, validation: 'passed', issues: [] };
-
-      try {
-        const thumb = await manipulateAsync(photo.uri, [{ resize: { width: 320 } }], {
-          compress: 0.6,
-          format: SaveFormat.JPEG,
-        });
-        // On native we can't easily get raw pixel data without a canvas.
-        // Use a simplified report for now; full Laplacian requires a native module.
-        report = { blurScore: 200, brightnessAvg: 128, validation: 'passed', issues: [] };
-      } catch {
-        // Quality check failed — proceed without blocking
-      }
-
-      const wasStable = trackerRef.current.isStable(3, 500);
-      if (!wasStable) {
-        report.issues.push('Cihaz hareket halindeydi');
-        if (report.validation !== 'failed') report.validation = 'warning';
-      }
-
-      const o = trackerRef.current.getCurrent();
-      const frame: CaptureFrame = {
-        id: s.currentTarget.id,
-        uri: photo.uri,
-        yawDeg: o.yawDeg,
-        pitchDeg: o.pitchDeg,
-        rollDeg: o.rollDeg,
-        timestamp: new Date().toISOString(),
-        blurScore: report.blurScore,
-        brightnessAvg: report.brightnessAvg,
-        validation: report.validation,
-      };
-
-      setState((prev) => recordFrame(prev, frame, report));
-    } catch {
-      Alert.alert('Hata', 'Fotoğraf çekilemedi');
-    } finally {
-      capturingRef.current = false;
-    }
-  }, []);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [state.phase, state.aligned, state.stable, state.manualShutter, state.currentTarget?.id, cameraReady, doCapture]);
 
   // -- Phase transitions --
-
-  const onPermissionGranted = useCallback(() => {
-    setState((s) => advanceToLeveling(s));
-  }, []);
 
   const onLevelOk = useCallback(() => {
     setState((s) => advanceToCalibration(s));
@@ -212,8 +238,7 @@ export function GuidedCamera({
   // -- Derived values --
 
   const stats = getCompletionStats(state.targets, state.completedIds);
-  const tracker = trackerRef.current;
-  const isLevel = tracker.isLevel();
+  const isLevel = trackerRef.current.isLevel();
 
   // -- Permission screen --
 
@@ -239,12 +264,6 @@ export function GuidedCamera({
     );
   }
 
-  // Once permission is granted, advance phase if still on 'permission'
-  if (state.phase === 'permission') {
-    // Use a microtask so we don't setState during render
-    Promise.resolve().then(onPermissionGranted);
-  }
-
   // -- Review screen --
 
   if (state.phase === 'review' || state.phase === 'done') {
@@ -263,7 +282,7 @@ export function GuidedCamera({
     );
   }
 
-  // -- Camera screens (leveling / calibration / capturing) --
+  // -- Camera screens (permission / leveling / calibration / capturing) --
 
   return (
     <View style={styles.container}>
@@ -290,21 +309,24 @@ export function GuidedCamera({
           <View style={{ width: 36 }} />
         </View>
 
+        {/* Waiting for permission phase — show nothing over camera */}
+        {state.phase === 'permission' && null}
+
         {/* Leveling phase */}
         {state.phase === 'leveling' && (
           <View style={styles.panel}>
             <Text style={styles.panelTitle}>Cihazı hazırlayın</Text>
             <Text style={styles.panelBody}>
-              Telefonu dikey tutun ve odanın ortasında durun. Etrafınızda
-              360° döneceksiniz.
+              Telefonu dik tutun ve odanın ortasında durun.
+              Etrafınızda 360° döneceksiniz.
             </Text>
             <View style={[styles.badge, isLevel && styles.badgeOk]}>
               <Text style={styles.badgeText}>
                 {Platform.OS === 'web'
                   ? 'Web: sensör yok — devam edebilirsiniz'
                   : isLevel
-                    ? 'Hazır'
-                    : 'Telefonu dikey ve sabit tutun'}
+                    ? '✓ Hazır'
+                    : 'Telefonu dik ve düz tutun'}
               </Text>
             </View>
             <TouchableOpacity
@@ -314,6 +336,12 @@ export function GuidedCamera({
             >
               <Text style={styles.primaryBtnText}>Devam</Text>
             </TouchableOpacity>
+            {/* Fallback: let user skip level check on native too */}
+            {Platform.OS !== 'web' && !isLevel && (
+              <TouchableOpacity style={styles.skipBtn} onPress={onLevelOk}>
+                <Text style={styles.skipText}>Yine de devam et</Text>
+              </TouchableOpacity>
+            )}
           </View>
         )}
 
@@ -376,11 +404,20 @@ const styles = StyleSheet.create({
   },
   camera: { flex: 1, width: '100%' },
   infoText: { color: '#9ca3af', fontSize: 16, textAlign: 'center', marginBottom: 16 },
-  primaryBtn: { backgroundColor: '#8b5cf6', borderRadius: 12, paddingHorizontal: 28, paddingVertical: 14, marginTop: 8 },
+  primaryBtn: {
+    backgroundColor: '#8b5cf6',
+    borderRadius: 12,
+    paddingHorizontal: 28,
+    paddingVertical: 14,
+    marginTop: 8,
+    alignItems: 'center',
+  },
   primaryBtnText: { color: '#fff', fontSize: 16, fontWeight: '700', textAlign: 'center' },
   btnDisabled: { opacity: 0.4 },
   linkBtn: { marginTop: 14 },
   linkText: { color: '#8b5cf6', fontSize: 15 },
+  skipBtn: { marginTop: 10, alignItems: 'center', padding: 8 },
+  skipText: { color: '#6b7280', fontSize: 13, textDecorationLine: 'underline' },
 
   topBar: {
     flexDirection: 'row',
@@ -408,7 +445,7 @@ const styles = StyleSheet.create({
     marginHorizontal: 16,
     marginBottom: Platform.OS === 'ios' ? 130 : 100,
     marginTop: 'auto' as any,
-    backgroundColor: 'rgba(0,0,0,0.78)',
+    backgroundColor: 'rgba(0,0,0,0.82)',
     borderRadius: 16,
     padding: 20,
   },
