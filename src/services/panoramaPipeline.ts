@@ -1,27 +1,33 @@
 import type {
+  SceneCaptureSet,
   ProcessingJob,
-  SceneCaptureSource,
   SceneMediaType,
   Scene,
   SceneProjection,
+  SceneStitchedAsset,
+  StitchStatus,
 } from '@/src/types/tour';
-import { buildSceneProjection } from '@/src/utils/sceneProjection';
+import { buildPreviewProjectionFromCaptureSet } from '@/src/utils/sceneProjection';
+import { getOrderedCaptureShots, isCaptureSetComplete } from '@/src/utils/sceneState';
 
 interface StartPanoramaPipelineParams {
   sceneId: string;
-  primaryUri: string;
+  tourId: string;
+  mode: Scene['scene_type'];
   mediaType: SceneMediaType;
-  sources?: SceneCaptureSource[];
-  sectorMask?: boolean[];
+  captureSet?: SceneCaptureSet | null;
 }
 
 interface StartPanoramaPipelineResult {
-  projection: SceneProjection;
+  previewProjection: SceneProjection | null;
   processingJob: ProcessingJob | null;
+  stitchStatus: StitchStatus;
 }
 
 interface RemoteQueueResponse {
   jobId?: string;
+  status?: ProcessingJob['status'];
+  estimatedStage?: string;
 }
 
 interface RemoteStatusResponse {
@@ -34,23 +40,24 @@ interface RemoteStatusResponse {
 }
 
 interface PollPanoramaPipelineResult {
-  projection?: SceneProjection | null;
+  stitchedAsset?: SceneStitchedAsset | null;
   processingJob?: ProcessingJob | null;
   panoramaUrl?: string | null;
   thumbnailUrl?: string | null;
+  stitchStatus?: StitchStatus;
 }
 
 const REMOTE_STITCH_URL = process.env.EXPO_PUBLIC_PANORAMA_STITCH_URL;
 const REMOTE_STITCH_STATUS_URL = process.env.EXPO_PUBLIC_PANORAMA_STITCH_STATUS_URL;
 
 function shouldQueueRemoteStitch(
-  projection: SceneProjection,
   params: StartPanoramaPipelineParams,
 ): boolean {
   return Boolean(
     REMOTE_STITCH_URL &&
-      projection.kind === 'guided_strip_360' &&
-      params.mediaType !== 'photo',
+      params.captureSet &&
+      isCaptureSetComplete(params.captureSet) &&
+      params.mediaType !== null,
   );
 }
 
@@ -85,6 +92,7 @@ function buildStatusUrl(jobId: string): string | null {
 async function queueRemotePanoramaStitch(
   params: StartPanoramaPipelineParams,
 ): Promise<RemoteQueueResponse> {
+  const captureShots = getOrderedCaptureShots(params.captureSet);
   const response = await fetch(REMOTE_STITCH_URL!, {
     method: 'POST',
     headers: {
@@ -92,10 +100,18 @@ async function queueRemotePanoramaStitch(
     },
     body: JSON.stringify({
       sceneId: params.sceneId,
-      primaryUri: params.primaryUri,
+      tourId: params.tourId,
+      mode: params.mode,
       mediaType: params.mediaType,
-      sources: params.sources ?? [],
-      sectorMask: params.sectorMask ?? [],
+      captureSet: params.captureSet,
+      sources: captureShots.map((shot) => ({
+        direction: shot.direction,
+        uri: shot.uri,
+        capturedAt: shot.captured_at,
+        yawDeg: shot.yawDeg,
+        pitchDeg: shot.pitchDeg,
+        rollDeg: shot.rollDeg,
+      })),
     }),
   });
 
@@ -110,52 +126,50 @@ async function queueRemotePanoramaStitch(
 export async function startPanoramaPipeline(
   params: StartPanoramaPipelineParams,
 ): Promise<StartPanoramaPipelineResult> {
-  const projection = buildSceneProjection({
-    primaryUri: params.primaryUri,
-    sources: params.sources,
-    sectorMask: params.sectorMask,
-  });
+  const previewProjection = buildPreviewProjectionFromCaptureSet(params.captureSet);
+  const primaryShot = params.captureSet?.shots[params.captureSet.primary_direction ?? 'front']
+    ?? getOrderedCaptureShots(params.captureSet)[0]
+    ?? null;
 
-  if (!shouldQueueRemoteStitch(projection, params)) {
+  if (!shouldQueueRemoteStitch(params)) {
     return {
-      projection,
+      previewProjection,
       processingJob: null,
+      stitchStatus: 'idle',
     };
   }
 
   try {
     const remote = await queueRemotePanoramaStitch(params);
+    const remoteStatus = remote.status ?? 'pending';
 
     return {
-      projection: {
-        ...projection,
-        provider: 'remote',
-        remote_job_id: remote.jobId ?? null,
-      },
-      processingJob: buildPendingJob(params.sceneId, params.primaryUri, remote.jobId),
+      previewProjection,
+      processingJob: buildPendingJob(params.sceneId, primaryShot?.uri ?? '', remote.jobId),
+      stitchStatus: remoteStatus === 'processing' ? 'processing' : 'queued',
     };
   } catch {
     return {
-      projection,
+      previewProjection,
       processingJob: null,
+      stitchStatus: 'idle',
     };
   }
 }
 
 export async function pollPanoramaPipeline(scene: Scene): Promise<PollPanoramaPipelineResult | null> {
   const processingJob = scene.processing_job;
-  const projection = scene.projection;
+  const projection = scene.preview_projection ?? scene.projection;
 
   if (
     !processingJob ||
     !projection ||
-    projection.provider !== 'remote' ||
     (processingJob.status !== 'pending' && processingJob.status !== 'processing')
   ) {
     return null;
   }
 
-  const remoteJobId = projection.remote_job_id ?? processingJob.id;
+  const remoteJobId = processingJob.id;
   const statusUrl = buildStatusUrl(remoteJobId);
 
   if (!statusUrl) {
@@ -186,31 +200,35 @@ export async function pollPanoramaPipeline(scene: Scene): Promise<PollPanoramaPi
     };
 
     if (nextStatus === 'completed' && json.panoramaUrl) {
+      const stitchedAsset: SceneStitchedAsset = {
+        uri: json.panoramaUrl,
+        provider: 'remote',
+        job_id: remoteJobId,
+        created_at: new Date().toISOString(),
+      };
+
       return {
         panoramaUrl: json.panoramaUrl,
         thumbnailUrl: json.thumbnailUrl ?? json.panoramaUrl,
-        projection: {
-          version: 1,
-          kind: 'single_image',
-          source_uris: [json.panoramaUrl],
-          provider: 'remote',
-          remote_job_id: remoteJobId,
-        },
+        stitchedAsset,
         processingJob: {
           ...nextJob,
           progress: 100,
         },
+        stitchStatus: 'completed',
       };
     }
 
     if (nextStatus === 'failed') {
       return {
         processingJob: nextJob,
+        stitchStatus: 'failed',
       };
     }
 
     return {
       processingJob: nextJob,
+      stitchStatus: nextStatus === 'processing' ? 'processing' : 'queued',
     };
   } catch {
     return {
@@ -220,6 +238,7 @@ export async function pollPanoramaPipeline(scene: Scene): Promise<PollPanoramaPi
         error_message: 'Remote stitch status unavailable',
         updated_at: new Date().toISOString(),
       },
+      stitchStatus: 'failed',
     };
   }
 }

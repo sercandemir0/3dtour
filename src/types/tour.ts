@@ -7,6 +7,18 @@ export type JobType = 'panorama_stitch' | 'gaussian_splat' | 'video_extract';
 export type JobStatus = 'pending' | 'processing' | 'completed' | 'failed';
 export type SceneProjectionKind = 'single_image' | 'guided_strip_360';
 export type SceneProjectionProvider = 'local' | 'remote';
+export type CaptureDirection = 'front' | 'right' | 'back' | 'left' | 'up' | 'down';
+export type CaptureStatus = 'empty' | 'partial' | 'complete';
+export type StitchStatus = 'idle' | 'queued' | 'processing' | 'completed' | 'failed';
+
+export const CAPTURE_DIRECTIONS: CaptureDirection[] = [
+  'front',
+  'right',
+  'back',
+  'left',
+  'up',
+  'down',
+];
 
 export interface Vector3 {
   x: number;
@@ -30,6 +42,24 @@ export interface SceneCaptureSource {
   sectorIndex?: number;
 }
 
+export interface SceneCaptureShot {
+  uri: string;
+  direction: CaptureDirection;
+  captured_at: string;
+  yawDeg?: number;
+  pitchDeg?: number;
+  rollDeg?: number;
+  validation?: 'pending' | 'passed' | 'failed';
+}
+
+export interface SceneCaptureSet {
+  version: 1;
+  required_directions: CaptureDirection[];
+  shots: Partial<Record<CaptureDirection, SceneCaptureShot>>;
+  primary_direction: CaptureDirection | null;
+  finalized_at: string | null;
+}
+
 export interface SceneProjection {
   version: 1;
   kind: SceneProjectionKind;
@@ -37,6 +67,15 @@ export interface SceneProjection {
   provider: SceneProjectionProvider;
   coverage_sector_count?: number;
   remote_job_id?: string | null;
+}
+
+export interface SceneStitchedAsset {
+  uri: string;
+  provider: SceneProjectionProvider;
+  job_id: string | null;
+  width?: number | null;
+  height?: number | null;
+  created_at: string;
 }
 
 export interface Tour {
@@ -71,6 +110,11 @@ export interface Scene {
   camera_target: Vector3 | null;
   created_at: string;
   hotspots?: Hotspot[];
+  capture_set?: SceneCaptureSet | null;
+  capture_status?: CaptureStatus;
+  stitch_status?: StitchStatus;
+  stitched_asset?: SceneStitchedAsset | null;
+  preview_projection?: SceneProjection | null;
   /** Raw captures from guided sweep; optional for legacy scenes. */
   capture_sources?: SceneCaptureSource[];
   /** Length 6: horizontal sector i covered if true (see sectorCoverage util). */

@@ -4,6 +4,7 @@ import { Canvas, useFrame, useThree, useLoader } from '@react-three/fiber';
 import * as THREE from 'three';
 import type { Scene } from '@/src/types/tour';
 import { getGuidedPanoramaUris } from '@/src/utils/sceneProjection';
+import { getSceneStitchedAsset, getSceneViewerMode } from '@/src/utils/sceneState';
 
 interface Props {
   scene: Scene;
@@ -177,8 +178,13 @@ function HotspotMarkers({
 }
 
 export function PanoramaViewerWeb({ scene, scenes, onHotspotClick }: Props) {
-  const guidedUris = useMemo(() => getGuidedPanoramaUris(scene), [scene]);
-  const fallbackPanoramaUrl = scene.panorama_url ?? '';
+  const stitchedUri = getSceneStitchedAsset(scene)?.uri ?? null;
+  const viewerMode = getSceneViewerMode(scene);
+  const guidedUris = useMemo(
+    () => (viewerMode === 'preview' ? getGuidedPanoramaUris(scene) : null),
+    [scene, viewerMode],
+  );
+  const fallbackPanoramaUrl = stitchedUri ?? scene.panorama_url ?? '';
   const [panoramaUrl, setPanoramaUrl] = useState(fallbackPanoramaUrl);
   const [loadingProjection, setLoadingProjection] = useState(false);
 
@@ -216,10 +222,19 @@ export function PanoramaViewerWeb({ scene, scenes, onHotspotClick }: Props) {
     };
   }, [fallbackPanoramaUrl, guidedUris]);
 
-  if (!scene.panorama_url) return null;
+  if (!fallbackPanoramaUrl && !guidedUris?.length) return null;
 
   return (
     <View style={styles.container}>
+      <View style={styles.modeBadge}>
+        <Text style={styles.modeBadgeText}>
+          {viewerMode === 'stitched'
+            ? 'Islenmis panorama'
+            : viewerMode === 'preview'
+              ? 'Onizleme 360'
+              : 'Legacy panorama'}
+        </Text>
+      </View>
       {loadingProjection && (
         <View style={styles.loadingOverlay}>
           <ActivityIndicator size="large" color="#8b5cf6" />
@@ -245,6 +260,21 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: '#000',
+  },
+  modeBadge: {
+    position: 'absolute',
+    top: 18,
+    left: 18,
+    zIndex: 3,
+    backgroundColor: 'rgba(0,0,0,0.55)',
+    borderRadius: 999,
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+  },
+  modeBadgeText: {
+    color: '#f5f3ff',
+    fontSize: 12,
+    fontWeight: '700',
   },
   loadingOverlay: {
     position: 'absolute',

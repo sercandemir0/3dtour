@@ -1,8 +1,9 @@
 import { useRef, useMemo } from 'react';
-import { View, StyleSheet } from 'react-native';
+import { View, StyleSheet, Text } from 'react-native';
 import { WebView } from 'react-native-webview';
 import type { Scene } from '@/src/types/tour';
 import { getGuidedPanoramaUris } from '@/src/utils/sceneProjection';
+import { getSceneStitchedAsset, getSceneViewerMode } from '@/src/utils/sceneState';
 
 interface Props {
   scene: Scene;
@@ -12,7 +13,12 @@ interface Props {
 
 export function PanoramaViewerMobile({ scene, scenes, onHotspotClick }: Props) {
   const webViewRef = useRef<WebView>(null);
-  const guidedUris = useMemo(() => getGuidedPanoramaUris(scene), [scene]);
+  const stitchedUri = getSceneStitchedAsset(scene)?.uri ?? null;
+  const viewerMode = getSceneViewerMode(scene);
+  const guidedUris = useMemo(
+    () => (viewerMode === 'preview' ? getGuidedPanoramaUris(scene) : null),
+    [scene, viewerMode],
+  );
 
   const hotspots = (scene.hotspots ?? [])
     .filter((h) => h.target_scene_id && h.yaw != null && h.pitch != null)
@@ -26,8 +32,8 @@ export function PanoramaViewerMobile({ scene, scenes, onHotspotClick }: Props) {
     }));
 
   const html = useMemo(
-    () => generatePannellumHTML(scene.panorama_url!, hotspots, guidedUris),
-    [scene.id, scene.panorama_url, guidedUris, JSON.stringify(hotspots)],
+    () => generatePannellumHTML(stitchedUri ?? scene.panorama_url ?? '', hotspots, guidedUris),
+    [scene.id, stitchedUri, scene.panorama_url, guidedUris, JSON.stringify(hotspots)],
   );
 
   const handleMessage = (event: any) => {
@@ -39,10 +45,19 @@ export function PanoramaViewerMobile({ scene, scenes, onHotspotClick }: Props) {
     } catch {}
   };
 
-  if (!scene.panorama_url) return null;
+  if (!stitchedUri && !scene.panorama_url && !guidedUris?.length) return null;
 
   return (
     <View style={styles.container}>
+      <View style={styles.modeBadge}>
+        <Text style={styles.modeBadgeText}>
+          {viewerMode === 'stitched'
+            ? 'Islenmis panorama'
+            : viewerMode === 'preview'
+              ? 'Onizleme 360'
+              : 'Legacy panorama'}
+        </Text>
+      </View>
       <WebView
         ref={webViewRef}
         source={{ html }}
@@ -173,8 +188,12 @@ function generatePannellumHTML(
     if (guidedUris.length) {
       buildGuidedPanorama(guidedUris)
         .then(initPanorama)
-        .catch(function() { initPanorama('${imageUrl}'); });
-    } else {
+        .catch(function() {
+          if ('${imageUrl}') {
+            initPanorama('${imageUrl}');
+          }
+        });
+    } else if ('${imageUrl}') {
       initPanorama('${imageUrl}');
     }
   </script>
@@ -186,6 +205,21 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: '#000',
+  },
+  modeBadge: {
+    position: 'absolute',
+    top: 18,
+    left: 18,
+    zIndex: 2,
+    backgroundColor: 'rgba(0,0,0,0.55)',
+    borderRadius: 999,
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+  },
+  modeBadgeText: {
+    color: '#f5f3ff',
+    fontSize: 12,
+    fontWeight: '700',
   },
   webview: {
     flex: 1,

@@ -3,6 +3,7 @@ import { View, ActivityIndicator, StyleSheet } from 'react-native';
 import { useLocalSearchParams } from 'expo-router';
 import { useTourStore } from '@/src/stores/tourStore';
 import { HotspotEditor } from '@/src/components/HotspotEditor';
+import { canEditSceneHotspots } from '@/src/utils/sceneState';
 
 export default function HotspotsScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
@@ -15,7 +16,7 @@ export default function HotspotsScreen() {
 
   useEffect(() => {
     if (currentTour?.scenes?.length && !activeSceneId) {
-      const firstWithMedia = currentTour.scenes.find((s) => s.panorama_url);
+      const firstWithMedia = currentTour.scenes.find((scene) => canEditSceneHotspots(scene));
       if (firstWithMedia) setActiveSceneId(firstWithMedia.id);
     }
   }, [currentTour]);

@@ -10,9 +10,18 @@ import {
   Dimensions,
 } from 'react-native';
 import type { Scene, Hotspot } from '@/src/types/tour';
+import { CAPTURE_DIRECTIONS } from '@/src/types/tour';
+import {
+  CAPTURE_DIRECTION_LABELS_TR,
+  canEditSceneHotspots,
+  getScenePreviewProjection,
+  getSceneThumbnailUri,
+  getSceneViewerMode,
+} from '@/src/utils/sceneState';
 
 const SCREEN_WIDTH = Dimensions.get('window').width;
 const PANORAMA_HEIGHT = 200;
+const SEGMENT_WIDTH = SCREEN_WIDTH / CAPTURE_DIRECTIONS.length;
 
 interface Props {
   scenes: Scene[];
@@ -39,12 +48,12 @@ export function HotspotEditor({
   const [pendingTap, setPendingTap] = useState<{ yaw: number; pitch: number } | null>(null);
 
   const activeScene = scenes.find((s) => s.id === activeSceneId);
-  const otherScenes = scenes.filter((s) => s.id !== activeSceneId && s.panorama_url);
+  const otherScenes = scenes.filter((scene) => scene.id !== activeSceneId && canEditSceneHotspots(scene));
 
-  if (!activeScene?.panorama_url) {
+  if (!activeScene || !canEditSceneHotspots(activeScene)) {
     return (
       <View style={styles.empty}>
-        <Text style={styles.emptyText}>Bu odanın fotoğrafı henüz yok. Önce çekim yapın.</Text>
+        <Text style={styles.emptyText}>Bu oda hotspot icin hazir degil. Once stitched veya tam preview durumuna getirin.</Text>
       </View>
     );
   }
@@ -66,12 +75,15 @@ export function HotspotEditor({
   };
 
   const hotspots = activeScene.hotspots ?? [];
+  const viewerMode = getSceneViewerMode(activeScene);
+  const stitchedPreviewUri = getSceneThumbnailUri(activeScene);
+  const previewProjection = getScenePreviewProjection(activeScene);
 
   return (
     <View style={styles.container}>
       {/* Scene tabs */}
       <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.sceneTabs}>
-        {scenes.filter((s) => s.panorama_url).map((scene) => (
+        {scenes.filter((scene) => canEditSceneHotspots(scene)).map((scene) => (
           <TouchableOpacity
             key={scene.id}
             style={[styles.sceneTab, scene.id === activeSceneId && styles.sceneTabActive]}
@@ -93,13 +105,30 @@ export function HotspotEditor({
       </ScrollView>
 
       {/* Panorama preview with tap-to-add */}
-      <Text style={styles.hint}>Panoramaya dokunarak hotspot ekleyin</Text>
+      <Text style={styles.hint}>
+        {viewerMode === 'preview'
+          ? 'Onizleme 360 seridine dokunarak hotspot ekleyin'
+          : 'Panoramaya dokunarak hotspot ekleyin'}
+      </Text>
       <TouchableOpacity activeOpacity={0.9} onPress={handleImageTap}>
-        <Image
-          source={{ uri: activeScene.panorama_url }}
-          style={styles.panoramaPreview}
-          resizeMode="cover"
-        />
+        {viewerMode === 'preview' && previewProjection?.source_uris?.length ? (
+          <View style={styles.panoramaPreviewRow}>
+            {previewProjection.source_uris.map((uri, index) => (
+              <View key={`${uri}-${index}`} style={styles.previewSegment}>
+                <Image source={{ uri }} style={styles.previewSegmentImage} resizeMode="cover" />
+                <Text style={styles.previewSegmentLabel}>
+                  {CAPTURE_DIRECTION_LABELS_TR[CAPTURE_DIRECTIONS[index]]}
+                </Text>
+              </View>
+            ))}
+          </View>
+        ) : (
+          <Image
+            source={{ uri: stitchedPreviewUri ?? '' }}
+            style={styles.panoramaPreview}
+            resizeMode="cover"
+          />
+        )}
         {/* Existing hotspot markers */}
         {hotspots.filter((h) => h.yaw != null && h.pitch != null).map((h) => {
           const x = ((h.yaw! + 180) / 360) * SCREEN_WIDTH;
@@ -162,8 +191,8 @@ export function HotspotEditor({
                   style={styles.targetOption}
                   onPress={() => handleSelectTarget(scene.id, scene.name)}
                 >
-                  {scene.thumbnail_url && (
-                    <Image source={{ uri: scene.thumbnail_url }} style={styles.targetThumb} />
+                  {getSceneThumbnailUri(scene) && (
+                    <Image source={{ uri: getSceneThumbnailUri(scene)! }} style={styles.targetThumb} />
                   )}
                   <Text style={styles.targetName}>{scene.name}</Text>
                 </TouchableOpacity>
@@ -205,6 +234,34 @@ const styles = StyleSheet.create({
   panoramaPreview: {
     width: SCREEN_WIDTH, height: PANORAMA_HEIGHT,
     backgroundColor: '#2d2d5e',
+  },
+  panoramaPreviewRow: {
+    width: SCREEN_WIDTH,
+    height: PANORAMA_HEIGHT,
+    flexDirection: 'row',
+    backgroundColor: '#18182d',
+  },
+  previewSegment: {
+    width: SEGMENT_WIDTH,
+    height: PANORAMA_HEIGHT,
+    borderRightWidth: 1,
+    borderRightColor: '#0f0f23',
+  },
+  previewSegmentImage: {
+    width: '100%',
+    height: '100%',
+  },
+  previewSegmentLabel: {
+    position: 'absolute',
+    left: 6,
+    bottom: 6,
+    color: '#fff',
+    fontSize: 10,
+    fontWeight: '700',
+    backgroundColor: 'rgba(0,0,0,0.45)',
+    paddingHorizontal: 6,
+    paddingVertical: 4,
+    borderRadius: 999,
   },
   hotspotDot: {
     position: 'absolute', width: 24, height: 24,

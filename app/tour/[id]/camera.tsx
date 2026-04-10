@@ -2,13 +2,11 @@ import { useEffect } from 'react';
 import { useLocalSearchParams, router } from 'expo-router';
 import { useTourStore } from '@/src/stores/tourStore';
 import { GuidedCamera, type GuidedCapturePayload } from '@/src/components/GuidedCamera';
-import { getCoverageSummary } from '@/src/utils/sectorCoverage';
 import type { Scene } from '@/src/types/tour';
+import { getSceneCaptureStatus, getSceneViewerMode } from '@/src/utils/sceneState';
 
 function sceneNeedsCapture(scene: Scene) {
-  if (!scene.panorama_url) return true;
-  const coverage = getCoverageSummary(scene);
-  return coverage.hasGuidedData && coverage.incomplete;
+  return getSceneCaptureStatus(scene) !== 'complete' && getSceneViewerMode(scene) === 'none';
 }
 
 function findNextPendingScene(scenes: Scene[], currentIdx: number) {
@@ -26,7 +24,13 @@ export default function CameraScreen() {
     sceneName: string;
   }>();
 
-  const { currentTour, commitSceneCapture, fetchTour } = useTourStore();
+  const {
+    currentTour,
+    saveCaptureShot,
+    finalizeCaptureSet,
+    queueStitch,
+    fetchTour,
+  } = useTourStore();
 
   useEffect(() => {
     if (id) {
@@ -40,24 +44,32 @@ export default function CameraScreen() {
 
   const handleComplete = async (payload: GuidedCapturePayload) => {
     if (!sceneId) return;
-    const pipeline = await commitSceneCapture(sceneId, {
-      primaryUri: payload.primaryUri,
-      sources: payload.sources,
-      sectorMask: payload.sectorMask,
-      mediaType: payload.mediaType,
-    });
+    for (const direction of payload.captureSet.required_directions) {
+      const shot = payload.captureSet.shots[direction];
+      if (!shot) {
+        continue;
+      }
+      await saveCaptureShot(sceneId, direction, {
+        uri: shot.uri,
+        captured_at: shot.captured_at,
+        yawDeg: shot.yawDeg,
+        pitchDeg: shot.pitchDeg,
+        rollDeg: shot.rollDeg,
+        validation: shot.validation,
+      });
+    }
 
-    const updatedScenes = scenes.map((scene) =>
+    await finalizeCaptureSet(sceneId, payload.mediaType);
+    await queueStitch(sceneId);
+    await fetchTour(id!);
+
+    const refreshedScenes = useTourStore.getState().currentTour?.scenes ?? scenes;
+    const updatedScenes = refreshedScenes.map((scene) =>
       scene.id === sceneId
         ? {
             ...scene,
-            panorama_url: payload.primaryUri,
-            thumbnail_url: payload.primaryUri,
-            media_type: payload.mediaType,
-            capture_sources: payload.sources,
-            coverage_sector_mask: payload.sectorMask,
-            projection: pipeline.projection,
-            processing_job: pipeline.processingJob,
+            capture_set: payload.captureSet,
+            capture_status: 'complete' as const,
           }
         : scene,
     );
@@ -82,9 +94,7 @@ export default function CameraScreen() {
       existingCapture={
         currentScene
           ? {
-              primaryUri: currentScene.panorama_url,
-              sources: currentScene.capture_sources,
-              sectorMask: currentScene.coverage_sector_mask,
+              captureSet: currentScene.capture_set,
               mediaType: currentScene.media_type,
             }
           : null

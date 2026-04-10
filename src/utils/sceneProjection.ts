@@ -1,9 +1,12 @@
 import type {
+  SceneCaptureSet,
   Scene,
   SceneCaptureSource,
   SceneProjection,
 } from '@/src/types/tour';
+import { CAPTURE_DIRECTIONS } from '@/src/types/tour';
 import { isFullCoverage, SECTOR_COUNT } from '@/src/utils/sectorCoverage';
+import { isCaptureSetComplete } from '@/src/utils/sceneState';
 
 function sortCaptureSourcesBySector(sources: SceneCaptureSource[]): SceneCaptureSource[] {
   return [...sources].sort((a, b) => {
@@ -59,12 +62,45 @@ export function buildSceneProjection(params: {
   };
 }
 
+export function buildPreviewProjectionFromCaptureSet(
+  captureSet?: SceneCaptureSet | null,
+): SceneProjection | null {
+  if (!captureSet || !isCaptureSetComplete(captureSet)) {
+    return null;
+  }
+
+  const orderedUris = CAPTURE_DIRECTIONS.map((direction) => captureSet.shots[direction]?.uri ?? null);
+  if (orderedUris.some((uri) => !uri)) {
+    return null;
+  }
+
+  return {
+    version: 1,
+    kind: 'guided_strip_360',
+    source_uris: orderedUris as string[],
+    provider: 'local',
+    coverage_sector_count: CAPTURE_DIRECTIONS.length,
+  };
+}
+
 export function getSceneProjection(scene: Scene): SceneProjection {
+  if (scene.preview_projection?.source_uris?.length) {
+    return {
+      ...scene.preview_projection,
+      provider: scene.preview_projection.provider ?? 'local',
+    };
+  }
+
   if (scene.projection?.source_uris?.length) {
     return {
       ...scene.projection,
       provider: scene.projection.provider ?? 'local',
     };
+  }
+
+  const previewProjection = buildPreviewProjectionFromCaptureSet(scene.capture_set);
+  if (previewProjection) {
+    return previewProjection;
   }
 
   return buildSceneProjection({

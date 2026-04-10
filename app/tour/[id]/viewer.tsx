@@ -11,12 +11,13 @@ import { useLocalSearchParams, router } from 'expo-router';
 import { useTourStore } from '@/src/stores/tourStore';
 import { PanoramaViewer } from '@/src/components/TourViewer/PanoramaViewer';
 import type { Scene } from '@/src/types/tour';
+import { isSceneViewable } from '@/src/utils/sceneState';
 
 export default function ViewerScreen() {
   const { id, startScene } = useLocalSearchParams<{ id: string; startScene?: string }>();
   const { currentTour, loading, fetchTour, reconcileTourProcessing } = useTourStore();
   const [activeSceneIndex, setActiveSceneIndex] = useState(0);
-  const scenes = (currentTour?.scenes ?? []).filter((s) => s.panorama_url);
+  const scenes = (currentTour?.scenes ?? []).filter((scene) => isSceneViewable(scene));
 
   useEffect(() => {
     if (id) fetchTour(id);
@@ -30,7 +31,6 @@ export default function ViewerScreen() {
     const hasPendingRemoteJobs = (currentTour.scenes ?? []).some((scene) => {
       const job = scene.processing_job;
       return (
-        scene.projection?.provider === 'remote' &&
         job != null &&
         (job.status === 'pending' || job.status === 'processing')
       );

@@ -1,22 +1,37 @@
 import { create } from 'zustand';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import type {
+  CaptureDirection,
   Tour,
   Scene,
   Hotspot,
   CaptureMode,
   SceneMediaType,
   SceneCaptureSource,
+  SceneCaptureSet,
+  SceneCaptureShot,
   SceneProjection,
   ProcessingJob,
 } from '@/src/types/tour';
+import { CAPTURE_DIRECTIONS } from '@/src/types/tour';
 import {
   startPanoramaPipeline,
   pollPanoramaPipeline,
 } from '@/src/services/panoramaPipeline';
+import {
+  createEmptyCaptureSet,
+  deriveCaptureStatus,
+  deriveStitchStatus,
+  getOrderedCaptureShots,
+  getSceneCaptureStatus,
+  getSceneStitchedAsset,
+  getSceneThumbnailUri,
+  getSceneViewerMode,
+  isCaptureSetComplete,
+} from '@/src/utils/sceneState';
+import { buildPreviewProjectionFromCaptureSet } from '@/src/utils/sceneProjection';
 
 const STORAGE_KEY = '@3dtour_tours';
-const COVERAGE_SECTOR_COUNT = 6;
 
 function uuid(): string {
   return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
@@ -50,6 +65,17 @@ interface TourState {
   updateScene: (id: string, updates: Partial<Scene>) => Promise<void>;
   deleteScene: (id: string) => Promise<void>;
   setSceneMedia: (sceneId: string, uri: string, mediaType: SceneMediaType) => Promise<void>;
+  saveCaptureShot: (
+    sceneId: string,
+    direction: CaptureDirection,
+    shot: Omit<SceneCaptureShot, 'direction'>,
+  ) => Promise<SceneCaptureSet>;
+  finalizeCaptureSet: (
+    sceneId: string,
+    mediaType?: SceneMediaType,
+  ) => Promise<{ captureSet: SceneCaptureSet; previewProjection: SceneProjection | null }>;
+  queueStitch: (sceneId: string) => Promise<ProcessingJob | null>;
+  reconcileStitch: (sceneId: string) => Promise<void>;
   commitSceneCapture: (
     sceneId: string,
     payload: {
@@ -76,7 +102,8 @@ async function saveTours(tours: Tour[]) {
 
 async function loadTours(): Promise<Tour[]> {
   const data = await AsyncStorage.getItem(STORAGE_KEY);
-  return data ? JSON.parse(data) : [];
+  const tours = data ? JSON.parse(data) : [];
+  return tours.map(normalizeTour);
 }
 
 function updateSceneInTours(
@@ -84,12 +111,45 @@ function updateSceneInTours(
   sceneId: string,
   updates: Partial<Scene>,
 ): Tour[] {
-  return tours.map((tour) => ({
+  return tours.map((tour) => normalizeTour({
     ...tour,
     scenes: tour.scenes?.map((scene) => (
       scene.id === sceneId ? { ...scene, ...updates } : scene
     )),
   }));
+}
+
+function normalizeScene(scene: Scene): Scene {
+  const captureSet = scene.capture_set ?? null;
+  const captureStatus = scene.capture_status ?? deriveCaptureStatus(captureSet);
+  const previewProjection = scene.preview_projection
+    ?? buildPreviewProjectionFromCaptureSet(captureSet)
+    ?? scene.projection
+    ?? null;
+  const stitchedAsset = scene.stitched_asset ?? getSceneStitchedAsset(scene);
+  const stitchStatus = scene.stitch_status ?? deriveStitchStatus({ ...scene, stitched_asset: stitchedAsset });
+  const thumbnailUrl = scene.thumbnail_url ?? getSceneThumbnailUri({ ...scene, stitched_asset: stitchedAsset, preview_projection: previewProjection });
+
+  return {
+    ...scene,
+    capture_set: captureSet,
+    capture_status: captureStatus,
+    stitch_status: stitchStatus,
+    stitched_asset: stitchedAsset,
+    preview_projection: previewProjection,
+    thumbnail_url: thumbnailUrl,
+  };
+}
+
+function normalizeTour(tour: Tour): Tour {
+  return {
+    ...tour,
+    scenes: (tour.scenes ?? []).map(normalizeScene),
+  };
+}
+
+function findScene(tours: Tour[], sceneId: string): Scene | null {
+  return tours.flatMap((tour) => tour.scenes ?? []).find((scene) => scene.id === sceneId) ?? null;
 }
 
 export const useTourStore = create<TourState>((set, get) => ({
@@ -158,6 +218,11 @@ export const useTourStore = create<TourState>((set, get) => ({
       camera_target: null,
       created_at: now,
       hotspots: [],
+      capture_set: null,
+      capture_status: 'empty',
+      stitch_status: 'idle',
+      stitched_asset: null,
+      preview_projection: null,
     }));
 
     const tour: Tour = {
@@ -182,13 +247,13 @@ export const useTourStore = create<TourState>((set, get) => ({
 
   updateTour: async (id, updates) => {
     const tours = get().tours.map((t) =>
-      t.id === id ? { ...t, ...updates, updated_at: new Date().toISOString() } : t
+      t.id === id ? normalizeTour({ ...t, ...updates, updated_at: new Date().toISOString() }) : t
     );
     await saveTours(tours);
     set({
       tours,
       currentTour: get().currentTour?.id === id
-        ? { ...get().currentTour!, ...updates }
+        ? tours.find((tour) => tour.id === id) ?? get().currentTour
         : get().currentTour,
     });
   },
@@ -225,10 +290,15 @@ export const useTourStore = create<TourState>((set, get) => ({
       camera_target: null,
       created_at: now,
       hotspots: [],
+      capture_set: null,
+      capture_status: 'empty',
+      stitch_status: 'idle',
+      stitched_asset: null,
+      preview_projection: null,
     };
 
     const tours = get().tours.map((t) =>
-      t.id === tourId ? { ...t, scenes: [...(t.scenes ?? []), scene] } : t
+      t.id === tourId ? normalizeTour({ ...t, scenes: [...(t.scenes ?? []), scene] }) : t
     );
     await saveTours(tours);
     const updatedTour = tours.find((t) => t.id === tourId) ?? null;
@@ -237,7 +307,7 @@ export const useTourStore = create<TourState>((set, get) => ({
   },
 
   updateScene: async (id, updates) => {
-    const tours = get().tours.map((t) => ({
+    const tours = get().tours.map((t) => normalizeTour({
       ...t,
       scenes: t.scenes?.map((s) => (s.id === id ? { ...s, ...updates } : s)),
     }));
@@ -246,10 +316,7 @@ export const useTourStore = create<TourState>((set, get) => ({
     if (currentTour?.scenes?.some((s) => s.id === id)) {
       set({
         tours,
-        currentTour: {
-          ...currentTour,
-          scenes: currentTour.scenes?.map((s) => (s.id === id ? { ...s, ...updates } : s)),
-        },
+        currentTour: tours.find((tour) => tour.id === currentTour.id) ?? currentTour,
       });
     } else {
       set({ tours });
@@ -257,7 +324,7 @@ export const useTourStore = create<TourState>((set, get) => ({
   },
 
   deleteScene: async (id) => {
-    const tours = get().tours.map((t) => ({
+    const tours = get().tours.map((t) => normalizeTour({
       ...t,
       scenes: t.scenes?.filter((s) => s.id !== id),
     }));
@@ -331,50 +398,181 @@ export const useTourStore = create<TourState>((set, get) => ({
   },
 
   setSceneMedia: async (sceneId, uri, mediaType) => {
-    const pipeline = await startPanoramaPipeline({
-      sceneId,
-      primaryUri: uri,
-      mediaType,
-    });
-
     const updates: Partial<Scene> = {
       panorama_url: uri,
       thumbnail_url: uri,
       media_type: mediaType,
+      capture_set: null,
+      capture_status: 'empty',
+      stitch_status: 'completed',
+      stitched_asset: {
+        uri,
+        provider: 'local',
+        job_id: null,
+        created_at: new Date().toISOString(),
+      },
+      preview_projection: null,
       capture_sources: undefined,
       coverage_sector_mask: undefined,
-      projection: pipeline.projection,
-      processing_job: pipeline.processingJob,
+      projection: {
+        version: 1,
+        kind: 'single_image',
+        source_uris: [uri],
+        provider: 'local',
+      },
+      processing_job: null,
     };
     await get().updateScene(sceneId, updates);
   },
 
-  commitSceneCapture: async (sceneId, { primaryUri, sources, sectorMask, mediaType }) => {
-    const paddedMask = Array.from(
-      { length: COVERAGE_SECTOR_COUNT },
-      (_, i) => !!sectorMask[i],
-    );
-    const pipeline = await startPanoramaPipeline({
-      sceneId,
-      primaryUri,
-      mediaType,
-      sources,
-      sectorMask: paddedMask,
+  saveCaptureShot: async (sceneId, direction, shot) => {
+    const scene = findScene(get().tours, sceneId);
+    const currentCaptureSet = scene?.capture_set ?? createEmptyCaptureSet();
+    const nextCaptureSet: SceneCaptureSet = {
+      ...currentCaptureSet,
+      shots: {
+        ...currentCaptureSet.shots,
+        [direction]: {
+          ...shot,
+          direction,
+        },
+      },
+      primary_direction: currentCaptureSet.primary_direction ?? 'front',
+      finalized_at: null,
+    };
+
+    const captureStatus = deriveCaptureStatus(nextCaptureSet);
+    const previewProjection = buildPreviewProjectionFromCaptureSet(nextCaptureSet);
+    const firstShotUri = nextCaptureSet.shots.front?.uri ?? getOrderedCaptureShots(nextCaptureSet)[0]?.uri ?? null;
+
+    await get().updateScene(sceneId, {
+      media_type: 'camera',
+      capture_set: nextCaptureSet,
+      capture_status: captureStatus,
+      stitch_status: captureStatus === 'complete' ? 'idle' : 'idle',
+      stitched_asset: null,
+      preview_projection: previewProjection,
+      panorama_url: scene?.panorama_url && !scene.capture_set ? scene.panorama_url : null,
+      thumbnail_url: firstShotUri,
+      processing_job: null,
+      projection: previewProjection,
     });
 
-    const updates: Partial<Scene> = {
-      panorama_url: primaryUri,
-      thumbnail_url: primaryUri,
-      media_type: mediaType,
-      capture_sources: sources,
-      coverage_sector_mask: paddedMask,
-      projection: pipeline.projection,
-      processing_job: pipeline.processingJob,
+    return nextCaptureSet;
+  },
+
+  finalizeCaptureSet: async (sceneId, mediaType = 'camera') => {
+    const scene = findScene(get().tours, sceneId);
+    const captureSet = scene?.capture_set ?? createEmptyCaptureSet();
+    const captureStatus = deriveCaptureStatus(captureSet);
+
+    if (captureStatus !== 'complete') {
+      throw new Error('Capture set tamamlanmadan finalize edilemez');
+    }
+
+    const finalizedCaptureSet: SceneCaptureSet = {
+      ...captureSet,
+      finalized_at: new Date().toISOString(),
     };
-    await get().updateScene(sceneId, updates);
+    const previewProjection = buildPreviewProjectionFromCaptureSet(finalizedCaptureSet);
+    const primaryShot =
+      finalizedCaptureSet.shots[finalizedCaptureSet.primary_direction ?? 'front']
+      ?? getOrderedCaptureShots(finalizedCaptureSet)[0]
+      ?? null;
+
+    await get().updateScene(sceneId, {
+      media_type: mediaType,
+      capture_set: finalizedCaptureSet,
+      capture_status: 'complete',
+      stitch_status: 'idle',
+      stitched_asset: null,
+      preview_projection: previewProjection,
+      panorama_url: null,
+      thumbnail_url: primaryShot?.uri ?? null,
+      processing_job: null,
+      projection: previewProjection,
+    });
+
     return {
-      projection: pipeline.projection,
-      processingJob: pipeline.processingJob,
+      captureSet: finalizedCaptureSet,
+      previewProjection,
+    };
+  },
+
+  queueStitch: async (sceneId) => {
+    const scene = findScene(get().tours, sceneId);
+    if (!scene?.capture_set || !isCaptureSetComplete(scene.capture_set)) {
+      return null;
+    }
+
+    const sceneWithFinalPreview = normalizeScene(scene);
+    const pipeline = await startPanoramaPipeline({
+      sceneId,
+      tourId: sceneWithFinalPreview.tour_id,
+      mode: sceneWithFinalPreview.scene_type,
+      mediaType: sceneWithFinalPreview.media_type,
+      captureSet: sceneWithFinalPreview.capture_set,
+    });
+
+    await get().updateScene(sceneId, {
+      capture_set: sceneWithFinalPreview.capture_set,
+      capture_status: 'complete',
+      preview_projection: pipeline.previewProjection,
+      projection: pipeline.previewProjection,
+      stitch_status: pipeline.processingJob ? pipeline.stitchStatus : 'idle',
+      processing_job: pipeline.processingJob,
+      stitched_asset: null,
+      panorama_url: null,
+    });
+
+    return pipeline.processingJob;
+  },
+
+  reconcileStitch: async (sceneId) => {
+    await get().reconcileSceneProcessing(sceneId);
+  },
+
+  commitSceneCapture: async (sceneId, { primaryUri, sources, sectorMask, mediaType }) => {
+    const captureSet = createEmptyCaptureSet();
+    CAPTURE_DIRECTIONS.forEach((direction, index) => {
+      const source = sources[index];
+      if (!source?.uri) {
+        return;
+      }
+      captureSet.shots[direction] = {
+        uri: source.uri,
+        direction,
+        captured_at: new Date().toISOString(),
+        yawDeg: source.yawDeg,
+        validation: 'passed',
+      };
+    });
+    captureSet.primary_direction = 'front';
+
+    for (const direction of CAPTURE_DIRECTIONS) {
+      const shot = captureSet.shots[direction];
+      if (!shot) {
+        continue;
+      }
+      await get().saveCaptureShot(sceneId, direction, {
+        uri: shot.uri,
+        captured_at: shot.captured_at,
+        yawDeg: shot.yawDeg,
+        validation: shot.validation,
+      });
+    }
+
+    const finalized = await get().finalizeCaptureSet(sceneId, mediaType);
+    const processingJob = await get().queueStitch(sceneId);
+
+    return {
+      projection: finalized.previewProjection ?? {
+        version: 1,
+        kind: 'single_image',
+        source_uris: [primaryUri],
+        provider: 'local',
+      },
+      processingJob,
     };
   },
 
@@ -387,7 +585,7 @@ export const useTourStore = create<TourState>((set, get) => ({
           return scene ? { ...scene, order: i } : null;
         })
         .filter(Boolean) as Scene[];
-      return { ...t, scenes: reordered };
+      return normalizeTour({ ...t, scenes: reordered });
     });
     await saveTours(tours);
     const currentTour = get().currentTour;
@@ -420,11 +618,15 @@ export const useTourStore = create<TourState>((set, get) => ({
     if (result.thumbnailUrl !== undefined) {
       updates.thumbnail_url = result.thumbnailUrl;
     }
-    if (result.projection !== undefined) {
-      updates.projection = result.projection;
+    if (result.stitchedAsset !== undefined) {
+      updates.stitched_asset = result.stitchedAsset;
+      updates.panorama_url = result.stitchedAsset?.uri ?? null;
     }
     if (result.processingJob !== undefined) {
       updates.processing_job = result.processingJob;
+    }
+    if (result.stitchStatus !== undefined) {
+      updates.stitch_status = result.stitchStatus;
     }
 
     const tours = updateSceneInTours(get().tours, sceneId, updates);
@@ -443,7 +645,6 @@ export const useTourStore = create<TourState>((set, get) => ({
     const remotePendingScenes = (tour?.scenes ?? []).filter((scene) => {
       const job = scene.processing_job;
       return (
-        scene.projection?.provider === 'remote' &&
         job != null &&
         (job.status === 'pending' || job.status === 'processing')
       );
@@ -456,14 +657,14 @@ export const useTourStore = create<TourState>((set, get) => ({
 
   getIncompleteScenes: (tourId) => {
     const tour = get().tours.find((t) => t.id === tourId);
-    return (tour?.scenes ?? []).filter((s) => !s.panorama_url);
+    return (tour?.scenes ?? []).filter((scene) => getSceneCaptureStatus(scene) !== 'complete' && getSceneViewerMode(scene) === 'none');
   },
 
   getCompletedCount: (tourId) => {
     const tour = get().tours.find((t) => t.id === tourId);
     const scenes = tour?.scenes ?? [];
     return {
-      completed: scenes.filter((s) => s.panorama_url).length,
+      completed: scenes.filter((scene) => getSceneViewerMode(scene) !== 'none').length,
       total: scenes.length,
     };
   },

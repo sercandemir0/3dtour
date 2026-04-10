@@ -16,7 +16,13 @@ import { useTourStore } from '@/src/stores/tourStore';
 import { TourProgress } from '@/src/components/TourProgress';
 import { VideoFramePicker } from '@/src/components/VideoFramePicker';
 import type { Scene } from '@/src/types/tour';
-import { getCoverageSummary, SECTOR_COUNT } from '@/src/utils/sectorCoverage';
+import {
+  getSceneCaptureStatus,
+  getSceneStatus,
+  getSceneThumbnailUri,
+  getSceneViewerMode,
+  isSceneViewable,
+} from '@/src/utils/sceneState';
 
 const MODE_LABELS: Record<string, string> = {
   panorama: '360° Panorama',
@@ -33,10 +39,13 @@ function SceneCard({
   onCapture: () => void;
   onPreview: () => void;
 }) {
-  const hasMedia = !!scene.panorama_url;
-  const cov = getCoverageSummary(scene);
-  const processingJob = scene.processing_job;
-  const processingStatus = processingJob?.status ?? null;
+  const hasMedia = isSceneViewable(scene);
+  const status = getSceneStatus(scene);
+  const captureStatus = getSceneCaptureStatus(scene);
+  const previewSource = getSceneThumbnailUri(scene);
+  const completedCaptureCount = scene.capture_set
+    ? Object.values(scene.capture_set.shots).filter(Boolean).length
+    : 0;
 
   return (
     <TouchableOpacity
@@ -46,7 +55,7 @@ function SceneCard({
     >
       {hasMedia ? (
         <Image
-          source={{ uri: scene.thumbnail_url ?? scene.panorama_url ?? '' }}
+          source={{ uri: previewSource ?? '' }}
           style={styles.sceneThumbnail}
           resizeMode="cover"
         />
@@ -60,28 +69,43 @@ function SceneCard({
         <View style={[styles.statusDot, hasMedia ? styles.statusDone : styles.statusEmpty]} />
         <Text style={styles.sceneName} numberOfLines={1}>{scene.name}</Text>
       </View>
-      {hasMedia && cov.hasGuidedData && (
+      {scene.capture_set && (
         <View style={styles.coverageBadge}>
           <Text
             style={[
               styles.coverageBadgeText,
-              cov.incomplete ? styles.coverageBadgeWarn : styles.coverageBadgeOk,
+              captureStatus !== 'complete' ? styles.coverageBadgeWarn : styles.coverageBadgeOk,
             ]}
           >
-            {cov.incomplete
-              ? `360° ${cov.filled}/${SECTOR_COUNT}`
-              : `360° ✓`}
+            {captureStatus === 'complete'
+              ? '6/6 yon'
+              : `${completedCaptureCount}/6 yon`}
           </Text>
         </View>
       )}
-      {processingStatus === 'pending' || processingStatus === 'processing' ? (
+      {status === 'ready_for_stitch' ? (
+        <View style={styles.processingBadge}>
+          <Text style={styles.processingBadgeText}>ready for stitch</Text>
+        </View>
+      ) : null}
+      {status === 'processing' ? (
         <View style={styles.processingBadge}>
           <Text style={styles.processingBadgeText}>stitch queue</Text>
         </View>
       ) : null}
-      {processingStatus === 'failed' ? (
+      {status === 'failed' ? (
         <View style={[styles.processingBadge, styles.processingBadgeFailed]}>
           <Text style={styles.processingBadgeText}>stitch fail</Text>
+        </View>
+      ) : null}
+      {status === 'stitched' ? (
+        <View style={[styles.processingBadge, styles.processingBadgeSuccess]}>
+          <Text style={styles.processingBadgeText}>stitched</Text>
+        </View>
+      ) : null}
+      {status === 'legacy_ready' ? (
+        <View style={[styles.processingBadge, styles.processingBadgeLegacy]}>
+          <Text style={styles.processingBadgeText}>legacy pano</Text>
         </View>
       ) : null}
       {!hasMedia && (
@@ -92,7 +116,7 @@ function SceneCard({
       {hasMedia && (
         <TouchableOpacity style={styles.recaptureBtn} onPress={onCapture} hitSlop={8}>
           <Text style={styles.recaptureBtnText}>
-            {cov.hasGuidedData && cov.incomplete ? '→' : '↻'}
+            {captureStatus !== 'complete' ? '→' : '↻'}
           </Text>
         </TouchableOpacity>
       )}
@@ -127,7 +151,6 @@ export default function TourDetailScreen() {
     const hasPendingRemoteJobs = (currentTour.scenes ?? []).some((scene) => {
       const job = scene.processing_job;
       return (
-        scene.projection?.provider === 'remote' &&
         job != null &&
         (job.status === 'pending' || job.status === 'processing')
       );
@@ -210,7 +233,7 @@ export default function TourDetailScreen() {
 
   const handleBulkGallery = async () => {
     if (!currentTour) return;
-    const emptyScenes = (currentTour.scenes ?? []).filter((s) => !s.panorama_url);
+    const emptyScenes = (currentTour.scenes ?? []).filter((scene) => getSceneViewerMode(scene) === 'none');
     if (emptyScenes.length === 0) {
       Alert.alert('Bilgi', 'Tüm odalara zaten medya eklenmiş.');
       return;
@@ -287,10 +310,10 @@ export default function TourDetailScreen() {
   };
 
   const handleViewTour = () => {
-    if (currentTour?.scenes?.some((s) => s.panorama_url)) {
+    if (currentTour?.scenes?.some((scene) => isSceneViewable(scene))) {
       router.push(`/tour/${id}/viewer`);
     } else {
-      Alert.alert('Uyarı', 'Turu görüntülemek için en az bir odanın fotoğrafını çekin.');
+      Alert.alert('Uyarı', 'Turu görüntülemek için önce bir sahneyi tamamlayın veya legacy panorama içe aktarın.');
     }
   };
 
@@ -308,11 +331,11 @@ export default function TourDetailScreen() {
 
   const scenes = currentTour.scenes ?? [];
   const { completed, total } = getCompletedCount(currentTour.id);
-  const coverageIncompleteCount = scenes.filter((s) => {
-    const g = getCoverageSummary(s);
-    return g.hasGuidedData && g.incomplete;
-  }).length;
-  const allDone = completed === total && total > 0 && coverageIncompleteCount === 0;
+  const coverageIncompleteCount = scenes.filter((scene) => getSceneCaptureStatus(scene) === 'partial').length;
+  const allDone = scenes.length > 0 && scenes.every((scene) => {
+    const status = getSceneStatus(scene);
+    return status === 'stitched' || status === 'legacy_ready' || status === 'ready_for_stitch';
+  });
 
   return (
     <>
@@ -332,15 +355,12 @@ export default function TourDetailScreen() {
           completed={completed}
           total={total}
           onPressIncomplete={() => {
-            const firstEmpty = scenes.find((s) => !s.panorama_url);
+            const firstEmpty = scenes.find((scene) => getSceneViewerMode(scene) === 'none');
             if (firstEmpty) {
               openGuidedCamera(firstEmpty);
               return;
             }
-            const covInc = scenes.find((s) => {
-              const g = getCoverageSummary(s);
-              return g.hasGuidedData && g.incomplete;
-            });
+            const covInc = scenes.find((scene) => getSceneCaptureStatus(scene) === 'partial');
             if (covInc) openGuidedCamera(covInc);
           }}
           coverageHint={
@@ -386,7 +406,7 @@ export default function TourDetailScreen() {
                 scene={scene}
                 onCapture={() => openGuidedCamera(scene)}
                 onPreview={() => {
-                  const idx = scenes.filter((s) => s.panorama_url).findIndex((s) => s.id === scene.id);
+                  const idx = scenes.filter((item) => isSceneViewable(item)).findIndex((item) => item.id === scene.id);
                   if (idx >= 0) router.push(`/tour/${id}/viewer?startScene=${idx}`);
                 }}
               />
@@ -400,7 +420,7 @@ export default function TourDetailScreen() {
             onPress={() => setGalleryModal({ step: 'rooms' })}
             activeOpacity={0.7}
           >
-            <Text style={styles.galleryImportLinkText}>Galeriden içe aktar (foto veya video)</Text>
+            <Text style={styles.galleryImportLinkText}>Galeriden legacy panorama içe aktar</Text>
           </TouchableOpacity>
 
           <TouchableOpacity
@@ -455,7 +475,7 @@ export default function TourDetailScreen() {
                 <>
                   <Text style={styles.modalTitle}>Hangi odaya?</Text>
                   <Text style={styles.modalSubtitle}>
-                    Rehberli çekim için oda kartına dokunun. Burası galeriden tek dosya içindir.
+                    Rehberli 6 yon cekim icin oda kartina dokunun. Bu alan tek dosyalik legacy import icindir.
                   </Text>
                   <ScrollView style={styles.roomPickList} nestedScrollEnabled>
                     {scenes.map((s) => (
@@ -482,7 +502,7 @@ export default function TourDetailScreen() {
                     <Text style={styles.modalOptionIcon}>🖼</Text>
                     <View style={styles.modalOptionContent}>
                       <Text style={styles.modalOptionTitle}>Fotoğraf seç</Text>
-                      <Text style={styles.modalOptionSub}>Galeriden panoramik görsel</Text>
+                      <Text style={styles.modalOptionSub}>Hazir panorama veya legacy tek gorsel</Text>
                     </View>
                   </TouchableOpacity>
                   <TouchableOpacity
@@ -492,7 +512,7 @@ export default function TourDetailScreen() {
                     <Text style={styles.modalOptionIcon}>🎬</Text>
                     <View style={styles.modalOptionContent}>
                       <Text style={styles.modalOptionTitle}>Video seç</Text>
-                      <Text style={styles.modalOptionSub}>Kare seçerek sahneye aktar</Text>
+                      <Text style={styles.modalOptionSub}>Yalniz legacy kare import icin</Text>
                     </View>
                   </TouchableOpacity>
                   <TouchableOpacity
@@ -565,6 +585,12 @@ const styles = StyleSheet.create({
   },
   processingBadgeFailed: {
     backgroundColor: '#ef444433',
+  },
+  processingBadgeSuccess: {
+    backgroundColor: '#14532d88',
+  },
+  processingBadgeLegacy: {
+    backgroundColor: '#4b556333',
   },
   processingBadgeText: {
     color: '#bfdbfe',
