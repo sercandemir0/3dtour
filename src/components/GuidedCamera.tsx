@@ -182,7 +182,6 @@ export function GuidedCamera({
     if (!cameraRef.current || !s.currentTarget || capturingRef.current) return;
     capturingRef.current = true;
     setCapturing(true);
-    setState((prev) => ({ ...prev, captureSubPhase: 'shutter' }));
 
     try {
       const photo = await cameraRef.current.takePictureAsync({ quality: 0.85 });

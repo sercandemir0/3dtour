@@ -192,7 +192,9 @@ export function updateOrientation(state: EngineState, o: Orientation): EngineSta
       };
 
   let subPhase = state.captureSubPhase;
-  if (!aligned) {
+  if (subPhase === 'shutter' || subPhase === 'validating') {
+    // transient phases managed by recordFrame — don't overwrite
+  } else if (!aligned) {
     subPhase = 'guiding';
   } else if (subPhase === 'guiding') {
     subPhase = 'stabilizing';
