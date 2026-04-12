@@ -17,6 +17,7 @@ import {
 } from './CaptureGrid';
 import type { Orientation } from './OrientationTracker';
 import type { QualityReport } from './QualityGate';
+import { DIRECTION_THRESHOLD_DEG } from './cameraGuidance';
 
 // ---------------------------------------------------------------------------
 // Data types
@@ -179,7 +180,8 @@ export function updateOrientation(state: EngineState, o: Orientation): EngineSta
 
   const { currentTarget, completedIds, targets } = state;
 
-  const active = currentTarget ?? findNearestTarget(targets, completedIds, o.yawDeg, o.pitchDeg);
+  const nearest = findNearestTarget(targets, completedIds, o.yawDeg, o.pitchDeg);
+  const active = nearest ?? currentTarget;
   const aligned = active ? isTargetAligned(active, o.yawDeg, o.pitchDeg) : false;
   const hint = active
     ? computeDirectionHint(active, o)
@@ -274,12 +276,12 @@ function computeDirectionHint(target: CaptureTarget, o: Orientation): DirectionH
   const aligned = isTargetAligned(target, o.yawDeg, o.pitchDeg);
 
   let yawDir: 'left' | 'right' | 'none' = 'none';
-  if (Math.abs(yawDeltaDeg) > 4) {
+  if (Math.abs(yawDeltaDeg) > DIRECTION_THRESHOLD_DEG) {
     yawDir = yawDeltaDeg > 0 ? 'right' : 'left';
   }
 
   let pitchDir: 'up' | 'down' | 'none' = 'none';
-  if (Math.abs(pitchDeltaDeg) > 4) {
+  if (Math.abs(pitchDeltaDeg) > DIRECTION_THRESHOLD_DEG) {
     pitchDir = pitchDeltaDeg > 0 ? 'up' : 'down';
   }
 
@@ -301,11 +303,12 @@ function computeDirectionHint(target: CaptureTarget, o: Orientation): DirectionH
       : null;
 
   const parts: string[] = [];
-  if (yawDir === 'left') parts.push(`Sola ~${Math.round(ay)}°`);
-  else if (yawDir === 'right') parts.push(`Sağa ~${Math.round(ay)}°`);
-
-  if (pitchDir === 'up') parts.push(`Yukarı ~${Math.round(ap)}°`);
-  else if (pitchDir === 'down') parts.push(`Aşağı ~${Math.round(ap)}°`);
+  if (ay > DIRECTION_THRESHOLD_DEG) {
+    parts.push(yawDeltaDeg < 0 ? `Sola ~${Math.round(ay)}°` : `Sağa ~${Math.round(ay)}°`);
+  }
+  if (ap > DIRECTION_THRESHOLD_DEG) {
+    parts.push(pitchDeltaDeg > 0 ? `Yukarı ~${Math.round(ap)}°` : `Aşağı ~${Math.round(ap)}°`);
+  }
 
   let label = parts.join(' · ');
   if (!label && sphereErr != null) {

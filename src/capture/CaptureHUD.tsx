@@ -26,6 +26,8 @@ interface Props {
   capturing: boolean;
   manualShutter: boolean;
   issueText: string | null;
+  yawDeltaDeg: number;
+  pitchDeltaDeg: number;
   onShutter: () => void;
   onReview: () => void;
   onToggleManual: () => void;
@@ -40,6 +42,8 @@ export function CaptureHUD({
   capturing,
   manualShutter,
   issueText,
+  yawDeltaDeg,
+  pitchDeltaDeg,
   onShutter,
   onReview,
   onToggleManual,
@@ -52,6 +56,9 @@ export function CaptureHUD({
     manualShutter,
     canShoot,
     capturing,
+    yawDeltaDeg,
+    pitchDeltaDeg,
+    aligned,
   });
 
   return (

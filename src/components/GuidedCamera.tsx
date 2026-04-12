@@ -109,16 +109,23 @@ export function GuidedCamera({
   }, [showIntroOnStart, state.phase]);
 
   useEffect(() => {
-    if (state.frames.length === 1 && prevFrameCountRef.current === 0) {
-      setSuccessCue('İlk kare tamamlandı. Şimdi sonraki hedefe dönün.');
+    const count = state.frames.length;
+    if (count > prevFrameCountRef.current) {
+      const remaining = state.targets.length - count;
+      const msg = count === 1
+        ? 'İlk kare tamamlandı! Sonraki hedefe dönün.'
+        : remaining > 0
+          ? `${count}. kare tamam — ${remaining} hedef kaldı.`
+          : 'Tüm kareler tamamlandı!';
+      setSuccessCue(msg);
       if (successTimerRef.current) clearTimeout(successTimerRef.current);
       successTimerRef.current = setTimeout(() => {
         setSuccessCue(null);
         successTimerRef.current = null;
       }, 2200);
     }
-    prevFrameCountRef.current = state.frames.length;
-  }, [state.frames.length]);
+    prevFrameCountRef.current = count;
+  }, [state.frames.length, state.targets.length]);
 
   useEffect(() => {
     return () => {
@@ -308,6 +315,9 @@ export function GuidedCamera({
     capturing,
     manualShutter: state.manualShutter,
     hasCapturedFrames: state.frames.length > 0,
+    yawDeltaDeg: state.directionHint.yawDeltaDeg,
+    pitchDeltaDeg: state.directionHint.pitchDeltaDeg,
+    ring: state.currentTarget?.ring ?? null,
   });
 
   // -- Permission screen --
@@ -471,6 +481,8 @@ export function GuidedCamera({
               capturing={capturing}
               manualShutter={state.manualShutter}
               issueText={state.lastQualityIssueText}
+              yawDeltaDeg={state.directionHint.yawDeltaDeg}
+              pitchDeltaDeg={state.directionHint.pitchDeltaDeg}
               onShutter={doCapture}
               onReview={onGoReview}
               onToggleManual={onToggleManual}

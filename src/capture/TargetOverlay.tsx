@@ -7,7 +7,7 @@ import { View, Text, StyleSheet, Dimensions } from 'react-native';
 import type { CaptureTarget } from './CaptureGrid';
 import { angleDiff, isTargetAligned, sphericalDistance } from './CaptureGrid';
 import type { DirectionHint } from './CaptureEngine';
-import { getOverlayCopy } from './cameraGuidance';
+import { getOverlayCopy, DIRECTION_THRESHOLD_DEG } from './cameraGuidance';
 
 interface Props {
   target: CaptureTarget | null;
@@ -92,7 +92,7 @@ export function TargetOverlay({
     pitchDeltaDeg: hint.pitchDeltaDeg,
   });
   const degreeHelp =
-    !aligned && (Math.abs(hint.yawDeltaDeg) > 2 || Math.abs(hint.pitchDeltaDeg) > 2)
+    !aligned && (Math.abs(hint.yawDeltaDeg) > DIRECTION_THRESHOLD_DEG || Math.abs(hint.pitchDeltaDeg) > DIRECTION_THRESHOLD_DEG)
       ? `Yaklaşık ${Math.round(Math.abs(hint.yawDeltaDeg))}° yatay, ${Math.round(Math.abs(hint.pitchDeltaDeg))}° dikey düzeltme kaldı`
       : null;
 
